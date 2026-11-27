@@ -49,8 +49,10 @@ const state = {
 const DEFAULT_ARROW_SCALE = Object.freeze({ x: -6.32600021, y: 6.32600021, z: 6.32600021 });
 const DEFAULT_ARROW_COLOR = '#83f26b';
 const SELECTED_ARROW_COLOR = '#ffae42';
-const ARROW_SURFACE_CLEARANCE_FACTOR = 0.01;
+const ARROW_SURFACE_CLEARANCE_FACTOR = 0.015;
 const UNITY_MODEL_UNIT_SCALE = 0.01;
+const UNITY_ARROW_ANIMATION_TRAVEL = 0.0253; // 3D Arrow.anim local X travel in Unity meters (at scale = 1)
+const UNITY_ARROW_ANIMATION_PERIOD = 2 / 3; // 3D Arrow.anim loop duration in seconds
 const UNITY_MODEL_ROOT_OFFSET = new THREE.Vector3(0, -0.613, -0.605);
 const arrowColorsByStep = new WeakMap();
 let unityArrowTemplate = null;
@@ -758,7 +760,9 @@ function addArrowAt(hit) {
   const localNormal = worldNormal.clone().applyMatrix3(modelNormalMatrix).normalize();
   arrow.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), localNormal);
   arrow.userData.previewDirection = localNormal;
-  const clearance = Math.max(state.modelSize * ARROW_SURFACE_CLEARANCE_FACTOR, 0.002);
+  const animationTravel = (UNITY_ARROW_ANIMATION_TRAVEL / UNITY_MODEL_UNIT_SCALE) * Math.abs(arrow.scale.x);
+  const surfaceGap = Math.max(state.modelSize * ARROW_SURFACE_CLEARANCE_FACTOR, 0.002);
+  const clearance = animationTravel + surfaceGap;
   arrow.userData.tipAnchor = state.modelRoot.worldToLocal(hit.point.clone().addScaledVector(worldNormal, clearance));
   arrow.position.copy(arrow.userData.tipAnchor).sub(getArrowTipOffset(arrow));
   state.modelRoot.add(arrow);
@@ -1194,13 +1198,13 @@ function animate(now = 0) {
   controls.update();
   if (state.previewMode) {
     const elapsed = (now - previewStarted) / 1000;
+    const phase = (1 - Math.cos((elapsed / UNITY_ARROW_ANIMATION_PERIOD) * Math.PI * 2)) * 0.5;
     for (const arrow of state.arrowObjects) {
       const base = previewPositions.get(arrow);
       if (!base) continue;
-      const direction = arrow.userData.previewDirection
-        || new THREE.Vector3(1, 0, 0).applyQuaternion(arrow.quaternion);
-      const travel = state.modelSize * 0.07 * (1 - Math.cos(elapsed * Math.PI * 2.4)) * 0.5;
-      arrow.position.copy(base).addScaledVector(direction, travel);
+      const localX = new THREE.Vector3(1, 0, 0).applyQuaternion(arrow.quaternion);
+      const travel = (UNITY_ARROW_ANIMATION_TRAVEL / UNITY_MODEL_UNIT_SCALE) * arrow.scale.x * phase;
+      arrow.position.copy(base).addScaledVector(localX, travel);
     }
   }
   renderer.render(scene, camera);
