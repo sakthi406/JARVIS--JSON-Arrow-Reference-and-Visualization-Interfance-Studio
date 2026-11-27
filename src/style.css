@@ -72,6 +72,13 @@ button { font: inherit; }
 .step-arrow-count { color: #8be87a; font: 8px var(--mono); }
 .panel-foot { display: flex; align-items: center; gap: 8px; border-top: 1px solid #292c30; padding: 13px 1px 2px; color: #74797d; font-size: 9px; }
 .foot-indicator { width: 5px; height: 5px; }
+.autosave-panel { display: grid; grid-template-columns: 1fr auto; gap: 7px; }
+.autosave-toggle { display: flex; align-items: center; gap: 6px; color: #b6b9bc; font-size: 9px; }
+.autosave-toggle input { margin: 0; accent-color: var(--red-bright); }
+.clear-autosave { border: 0; padding: 0; background: transparent; color: #a0a4a8; font: inherit; font-size: 8px; cursor: pointer; }
+.clear-autosave:hover { color: var(--red-bright); }
+.autosave-status { grid-column: 1 / -1; color: #74797d; font-size: 8px; }
+.autosave-status.error { color: #d25647; }
 .stage-column { display: flex; min-width: 0; flex-direction: column; gap: 10px; }
 .stage-toolbar { min-height: 46px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); padding: 0 14px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .breadcrumb { display: flex; align-items: center; gap: 9px; min-width: 0; font-size: 10px; color: #858a8f; }
@@ -206,7 +213,7 @@ button { font: inherit; }
 .topbar,.stage-toolbar,.stage-bottom { background: #fff; }
 .brand-divider { background: #cbd2d9; }
 .brand-subtitle,.topbar-status,.eyebrow,.file-copy small,.section-label,.scene-chevron,.step-number,
-.panel-foot,.progress-label,.empty-formats,.placement-help,.transform-empty,.inspector-foot { color: #687580; }
+.panel-foot,.autosave-toggle,.clear-autosave,.progress-label,.empty-formats,.placement-help,.transform-empty,.inspector-foot { color: #687580; }
 .file-count,.local-badge { border-color: #d3dae0; color: #596671; }
 .file-card { background: #f7f8fa; border-color: #d9dfe5; }
 .file-card:hover { background: #fff4f1; border-color: #dca69e; }

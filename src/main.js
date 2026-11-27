@@ -29,6 +29,7 @@ const state = {
   workflowFile: '',
   workflowExportName: '',
   modelFile: '',
+  modelFiles: [],
   modelRoot: null,
   currentSceneIndex: -1,
   currentStepIndex: -1,
@@ -184,6 +185,11 @@ scene.add(hoverMarker);
 
 let toastTimer;
 let previewStarted = 0;
+let autosaveEnabled = true;
+let autosaveDatabasePromise = null;
+let autosaveTimer = 0;
+let autosaveQueue = Promise.resolve();
+let modelAssetsDirty = false;
 const previewPositions = new Map();
 function colorsForStep(step = currentStep()) {
   if (!step) return [];
@@ -212,6 +218,220 @@ function showToast(message, isError = false) {
   ui.toast.classList.add('visible');
   window.clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => ui.toast.classList.remove('visible'), 3200);
+}
+
+function openAutosaveDatabase() {
+  if (!autosaveDatabasePromise) {
+    autosaveDatabasePromise = new Promise((resolve, reject) => {
+      const request = indexedDB.open('jarvis-local-autosave', 1);
+      request.onupgradeneeded = () => {
+        request.result.createObjectStore('records', { keyPath: 'key' });
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error('Could not open browser storage.'));
+    });
+  }
+  return autosaveDatabasePromise;
+}
+
+async function readAutosaveRecord(key) {
+  const database = await openAutosaveDatabase();
+  return new Promise((resolve, reject) => {
+    const request = database.transaction('records', 'readonly').objectStore('records').get(key);
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error || new Error('Could not read browser storage.'));
+  });
+}
+
+async function writeAutosaveRecord(record) {
+  const database = await openAutosaveDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction('records', 'readwrite');
+    transaction.objectStore('records').put(record);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error || new Error('Could not write browser storage.'));
+    transaction.onabort = () => reject(transaction.error || new Error('Browser storage write was interrupted.'));
+  });
+}
+
+async function deleteAutosaveRecord(key) {
+  const database = await openAutosaveDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction('records', 'readwrite');
+    transaction.objectStore('records').delete(key);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error || new Error('Could not clear browser storage.'));
+    transaction.onabort = () => reject(transaction.error || new Error('Browser storage cleanup was interrupted.'));
+  });
+}
+
+function setAutosaveStatus(message, isError = false) {
+  $('#autosave-status').textContent = message;
+  $('#autosave-status').classList.toggle('error', isError);
+}
+
+function makeAutosaveDraft() {
+  if (!state.workflow) return null;
+  const unityTransformStepIndices = [];
+  state.workflow.sop.forEach((sceneData, sceneIndex) => {
+    sceneData.steps.forEach((step, stepIndex) => {
+      if (state.unityTransformSteps.has(step)) unityTransformStepIndices.push([sceneIndex, stepIndex]);
+    });
+  });
+  return {
+    key: 'draft',
+    savedAt: Date.now(),
+    workflow: JSON.parse(JSON.stringify(state.workflow)),
+    workflowFile: state.workflowFile,
+    workflowExportName: state.workflowExportName,
+    currentSceneIndex: state.currentSceneIndex,
+    currentStepIndex: state.currentStepIndex,
+    currentArrowIndex: state.currentArrowIndex,
+    arrowColors: state.workflow.sop.map((sceneData) => sceneData.steps.map((step) => colorsForStep(step).slice())),
+    unityTransformStepIndices,
+    nextArrowColor: state.nextArrowColor,
+    pointerColor: state.pointerColor,
+    modelFile: state.modelFile,
+  };
+}
+
+function scheduleAutosave() {
+  if (!autosaveEnabled || (!state.workflow && !modelAssetsDirty)) return;
+  setAutosaveStatus('Saving…');
+  window.clearTimeout(autosaveTimer);
+  autosaveTimer = window.setTimeout(() => {
+    const draft = makeAutosaveDraft();
+    persistAutosaveDraft(draft);
+  }, 200);
+}
+
+function persistAutosaveDraft(draft) {
+  autosaveQueue = autosaveQueue
+    .then(async () => {
+      if (modelAssetsDirty) {
+        await writeAutosaveRecord({
+          key: 'model-assets',
+          files: state.modelFiles.map((file) => ({
+            name: file.name,
+            type: file.type,
+            lastModified: file.lastModified,
+            blob: file,
+          })),
+        });
+        modelAssetsDirty = false;
+      }
+      if (draft) await writeAutosaveRecord(draft);
+      setAutosaveStatus(`Saved ${new Date(draft?.savedAt || Date.now()).toLocaleTimeString()}`);
+    })
+    .catch((error) => {
+      setAutosaveStatus('Save failed', true);
+      showToast(`Autosave failed: ${error.message}`, true);
+    });
+  return autosaveQueue;
+}
+
+function flushAutosave() {
+  window.clearTimeout(autosaveTimer);
+  if (!autosaveEnabled || (!state.workflow && !modelAssetsDirty)) return;
+  const draft = makeAutosaveDraft();
+  persistAutosaveDraft(draft);
+}
+
+function filesFromAutosaveRecord(savedAssets) {
+  if (!Array.isArray(savedAssets?.files)) return [];
+  return savedAssets.files.map((file) => new File([file.blob], file.name, {
+    type: file.type,
+    lastModified: file.lastModified,
+  }));
+}
+
+async function restoreSavedModel(savedAssets) {
+  const files = filesFromAutosaveRecord(savedAssets);
+  return files.length ? loadModel(files) : false;
+}
+
+async function restoreAutosaveDraft(draft) {
+  if (!draft?.workflow || !Array.isArray(draft.workflow.sop)) return false;
+  state.workflow = draft.workflow;
+  state.workflowFile = draft.workflowFile || 'Restored workflow';
+  state.workflowExportName = draft.workflowExportName || 'workflow';
+  state.currentSceneIndex = -1;
+  state.currentStepIndex = -1;
+  state.currentArrowIndex = -1;
+  state.unityTransformSteps = new WeakSet();
+  for (const [sceneIndex, stepIndex] of draft.unityTransformStepIndices || []) {
+    const step = state.workflow.sop[sceneIndex]?.steps?.[stepIndex];
+    if (step) state.unityTransformSteps.add(step);
+  }
+  state.workflow.sop.forEach((sceneData, sceneIndex) => {
+    sceneData.steps.forEach((step, stepIndex) => {
+      const savedColors = draft.arrowColors?.[sceneIndex]?.[stepIndex];
+      if (Array.isArray(savedColors)) arrowColorsByStep.set(step, savedColors.slice());
+    });
+  });
+  state.nextArrowColor = draft.nextArrowColor || DEFAULT_ARROW_COLOR;
+  state.pointerColor = draft.pointerColor || '#ffc963';
+  $('#next-arrow-color').value = state.nextArrowColor;
+  $('#pointer-color').value = state.pointerColor;
+  hoverMaterial.color.set(state.pointerColor);
+  renderWorkflow();
+  const requestedScene = Number.isInteger(draft.currentSceneIndex) ? draft.currentSceneIndex : 0;
+  const requestedStep = Number.isInteger(draft.currentStepIndex) ? draft.currentStepIndex : 0;
+  if (state.workflow.sop[requestedScene]?.steps?.[requestedStep]) {
+    selectStep(requestedScene, requestedStep);
+  } else {
+    const firstScene = state.workflow.sop.findIndex((sceneData) => sceneData.steps.length);
+    if (firstScene >= 0) selectStep(firstScene, 0);
+    else renderInspector();
+  }
+  $('#project-status').textContent = 'SESSION RESTORED';
+  setAutosaveStatus(`Restored ${new Date(draft.savedAt).toLocaleTimeString()}`);
+
+  let modelRestoreFailed = false;
+  const savedAssets = await readAutosaveRecord('model-assets');
+  if (savedAssets?.files?.length) {
+    modelRestoreFailed = !(await restoreSavedModel(savedAssets));
+  } else if (draft.modelFile) {
+    $('#model-name').textContent = draft.modelFile;
+    $('#model-hint').textContent = 'Select the model file to continue';
+  }
+
+  if (state.currentStepIndex >= 0) {
+    const count = state.arrowObjects.length;
+    state.currentArrowIndex = Number.isInteger(draft.currentArrowIndex) && draft.currentArrowIndex < count
+      ? draft.currentArrowIndex
+      : count ? 0 : -1;
+    updateArrowAppearances();
+    renderInspector();
+  }
+  if (!modelRestoreFailed) showToast('Restored your autosaved workspace.');
+  return true;
+}
+
+async function initializeAutosave() {
+  try {
+    const settings = await readAutosaveRecord('settings');
+    autosaveEnabled = settings?.enabled !== false;
+    $('#autosave-toggle').checked = autosaveEnabled;
+    if (!autosaveEnabled) {
+      setAutosaveStatus('Autosave is off');
+      return;
+    }
+    const draft = await readAutosaveRecord('draft');
+    if (draft && await restoreAutosaveDraft(draft)) return;
+    const savedAssets = await readAutosaveRecord('model-assets');
+    if (savedAssets?.files?.length) {
+      if (await restoreSavedModel(savedAssets)) return;
+      setAutosaveStatus('Model restore failed', true);
+      return;
+    }
+    setAutosaveStatus('No saved draft');
+  } catch (error) {
+    autosaveEnabled = false;
+    $('#autosave-toggle').checked = false;
+    setAutosaveStatus('Unavailable', true);
+    showToast(`Autosave could not start: ${error.message}`, true);
+  }
 }
 
 function resizeRenderer() {
@@ -564,6 +784,7 @@ function selectStep(sceneIndex, stepIndex) {
   ui.placementButton.innerHTML = '<span class="crosshair-icon">⊕</span> Place arrow on model';
   renderWorkflow();
   renderCurrentArrows();
+  scheduleAutosave();
 }
 
 function renderInspector() {
@@ -634,6 +855,7 @@ function selectArrow(index) {
   state.currentArrowIndex = index;
   updateArrowAppearances();
   setPlacementMode(false);
+  scheduleAutosave();
 }
 
 function renderTransformFields() {
@@ -661,6 +883,7 @@ function renderTransformFields() {
     updateArrowAppearance(arrow, true);
     const icon = $('#arrow-list').children[state.currentArrowIndex]?.querySelector('.arrow-row-icon');
     if (icon) icon.style.color = SELECTED_ARROW_COLOR;
+    scheduleAutosave();
   });
   colorControl.append(colorLabel, colorInput);
   container.appendChild(colorControl);
@@ -726,6 +949,7 @@ function syncCurrentStepData() {
   state.unityTransformSteps.delete(step);
   step.arrowsApplicable = state.arrowObjects.length > 0;
   step.animationIndicator = state.arrowObjects.length ? state.arrowObjects.map(dataFromArrow) : null;
+  scheduleAutosave();
 }
 
 function workflowForUnityExport() {
@@ -1046,6 +1270,7 @@ async function openWorkflow(file) {
     }
     $('#project-status').textContent = selectedScenario ? `${selectedScenario.name.toUpperCase()} LOADED` : 'WORKFLOW LOADED';
     showToast(selectedScenario ? `Loaded ${selectedScenario.name} from ${file.name}.` : `Loaded ${file.name}.`);
+    scheduleAutosave();
   } catch (error) {
     showToast(`Could not open workflow: ${error.message}`, true);
   }
@@ -1064,7 +1289,7 @@ async function loadModel(files) {
   const modelFile = chosen.find((file) => /\.(fbx|glb|gltf|obj|stl)$/i.test(file.name));
   if (!modelFile) {
     showToast('Choose an FBX, GLB, GLTF, OBJ, or STL model file.', true);
-    return;
+    return false;
   }
   try {
     showToast(`Loading ${modelFile.name}…`);
@@ -1117,6 +1342,8 @@ async function loadModel(files) {
     state.modelCenter.copy(bounds.getCenter(new THREE.Vector3()));
     fitCamera();
     state.modelFile = modelFile.name;
+    state.modelFiles = chosen;
+    modelAssetsDirty = true;
     $('#model-name').textContent = modelFile.name;
     $('#model-hint').textContent = `${extension.toUpperCase()} · model loaded`;
     $('#model-badge').classList.add('loaded');
@@ -1126,9 +1353,12 @@ async function loadModel(files) {
     $('#project-status').textContent = 'MODEL READY';
     if (currentStep()) renderCurrentArrows();
     showToast(`Loaded ${modelFile.name}.`);
+    scheduleAutosave();
     window.setTimeout(() => resources.forEach((resourceUrl) => URL.revokeObjectURL(resourceUrl)), 5000);
+    return true;
   } catch (error) {
     showToast(`Could not load model: ${error.message}`, true);
+    return false;
   }
 }
 
@@ -1229,15 +1459,55 @@ ui.placementButton.addEventListener('click', () => setPlacementMode(!state.place
 ui.previewButton.addEventListener('click', () => state.previewMode ? stopPreview() : startPreview());
 $('#next-arrow-color').addEventListener('input', (event) => {
   state.nextArrowColor = event.target.value;
+  scheduleAutosave();
 });
 $('#pointer-color').addEventListener('input', (event) => {
   state.pointerColor = event.target.value;
   hoverMaterial.color.set(state.pointerColor);
+  scheduleAutosave();
 });
 $('#reset-camera').addEventListener('click', fitCamera);
+$('#autosave-toggle').addEventListener('change', async (event) => {
+  const enabled = event.target.checked;
+  autosaveEnabled = enabled;
+  if (!enabled) {
+    window.clearTimeout(autosaveTimer);
+    await autosaveQueue;
+  }
+  try {
+    await writeAutosaveRecord({ key: 'settings', enabled });
+    setAutosaveStatus(enabled ? 'Autosave enabled' : 'Autosave is off');
+    if (enabled) scheduleAutosave();
+  } catch (error) {
+    autosaveEnabled = !enabled;
+    event.target.checked = !enabled;
+    setAutosaveStatus('Could not update setting', true);
+    showToast(`Autosave setting could not be saved: ${error.message}`, true);
+  }
+});
+$('#clear-autosave').addEventListener('click', async () => {
+  if (!window.confirm('Clear the saved draft and locally stored model files? Your current workspace will remain open.')) return;
+  window.clearTimeout(autosaveTimer);
+  await autosaveQueue;
+  try {
+    await deleteAutosaveRecord('draft');
+    await deleteAutosaveRecord('model-assets');
+    modelAssetsDirty = false;
+    setAutosaveStatus(autosaveEnabled ? 'Saved draft cleared' : 'No saved draft');
+    showToast('Saved draft cleared. The current workspace is unchanged.');
+  } catch (error) {
+    setAutosaveStatus('Could not clear draft', true);
+    showToast(`Could not clear saved draft: ${error.message}`, true);
+  }
+});
+window.addEventListener('pagehide', flushAutosave);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') flushAutosave();
+});
 window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && state.placementMode) setPlacementMode(false);
   if ((event.key === 'Delete' || event.key === 'Backspace') && state.currentArrowIndex >= 0 && !['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) removeSelectedArrow();
 });
 renderWorkflow();
 renderInspector();
+initializeAutosave();

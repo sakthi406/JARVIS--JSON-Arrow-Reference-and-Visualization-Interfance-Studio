@@ -42,7 +42,11 @@
           <nav id="workflow-list" class="workflow-list" aria-label="Workflow scenes and steps">
             <div class="empty-list">Open a workflow JSON or Excel scenario sheet to see its steps.</div>
           </nav>
-          <div class="panel-foot"><span class="foot-indicator"></span> Changes stay in this browser session</div>
+          <div class="panel-foot autosave-panel">
+            <label class="autosave-toggle"><input id="autosave-toggle" type="checkbox" checked /> Autosave locally</label>
+            <button class="clear-autosave" id="clear-autosave" type="button">Clear saved draft</button>
+            <span id="autosave-status" class="autosave-status" role="status" aria-live="polite">Starting…</span>
+          </div>
         </aside>
 
         <section class="stage-column">

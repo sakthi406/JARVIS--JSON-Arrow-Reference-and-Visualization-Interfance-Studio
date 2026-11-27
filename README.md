@@ -11,6 +11,8 @@
 
 The app runs locally in the browser. Workflow files and models are not uploaded to a server. Supported model formats are FBX, GLB, GLTF, OBJ, and STL. For models with external textures, select the model and its companion resource files together in the file picker. OBJ materials are loaded when a matching MTL file is selected.
 
+Autosave is enabled by default and stores the current workflow edits, selected step, JARVIS-only arrow colors, and selected model files in this browser's IndexedDB. The next time you open the app at the same address in the same browser profile, it restores the saved workspace automatically. Use **Autosave locally** to turn this off or **Clear saved draft** to remove the locally stored copy; clearing the draft does not close or change the current workspace. Browser storage limits may prevent saving very large model files.
+
 ## Place and export arrows
 
 1. Choose a scene step in the left workflow list. Existing `animationIndicator` arrows are loaded into the viewport.
