@@ -26,12 +26,15 @@ const ui = {
 const state = {
   workflow: null,
   workflowFile: '',
+  workflowExportName: '',
   modelFile: '',
   modelRoot: null,
   currentSceneIndex: -1,
   currentStepIndex: -1,
   currentArrowIndex: -1,
   arrowObjects: [],
+  nextArrowColor: '#83f26b',
+  unityTransformSteps: new WeakSet(),
   placementMode: false,
   previewMode: false,
   hoveredPoint: null,
@@ -45,6 +48,10 @@ const state = {
 const DEFAULT_ARROW_SCALE = Object.freeze({ x: -6.32600021, y: 6.32600021, z: 6.32600021 });
 const DEFAULT_ARROW_COLOR = '#83f26b';
 const SELECTED_ARROW_COLOR = '#ffae42';
+const ARROW_SURFACE_CLEARANCE_FACTOR = 0.01;
+const UNITY_MODEL_UNIT_SCALE = 0.01;
+const UNITY_MODEL_ROOT_OFFSET = new THREE.Vector3(0, -0.613, -0.605);
+const UNITY_ARROW_TIP_LOCAL = new THREE.Vector3(-0.01752428, -0.00000871, 0.00062149);
 const arrowColorsByStep = new WeakMap();
 const scene = new THREE.Scene();
 scene.background = new THREE.Color('#eef1f4');
@@ -246,10 +253,10 @@ function fitCamera() {
 function createArrow() {
   const arrow = new THREE.Group();
   arrow.scale.set(DEFAULT_ARROW_SCALE.x / 5, DEFAULT_ARROW_SCALE.y / 5, DEFAULT_ARROW_SCALE.z / 5);
-  arrow.userData.color = DEFAULT_ARROW_COLOR;
+  arrow.userData.color = state.nextArrowColor;
   const green = new THREE.MeshStandardMaterial({
-    color: DEFAULT_ARROW_COLOR,
-    emissive: new THREE.Color(DEFAULT_ARROW_COLOR).multiplyScalar(0.28),
+    color: state.nextArrowColor,
+    emissive: new THREE.Color(state.nextArrowColor).multiplyScalar(0.28),
     emissiveIntensity: 0.8,
     metalness: 0.18,
     roughness: 0.28,
@@ -300,11 +307,21 @@ function getArrowTipOffset(arrow) {
   return arrow.userData.tipOffset.clone().multiply(arrow.scale).applyQuaternion(arrow.quaternion);
 }
 
-function arrowTransformFromData(arrow, transform) {
+function getUnityArrowTipOffset(scale, quaternion) {
+  return UNITY_ARROW_TIP_LOCAL.clone()
+    .multiply(new THREE.Vector3(
+      Number.isFinite(Number(scale.x)) ? Number(scale.x) : DEFAULT_ARROW_SCALE.x,
+      Number.isFinite(Number(scale.y)) ? Number(scale.y) : DEFAULT_ARROW_SCALE.y,
+      Number.isFinite(Number(scale.z)) ? Number(scale.z) : DEFAULT_ARROW_SCALE.z,
+    ))
+    .applyQuaternion(quaternion);
+}
+
+function arrowTransformFromData(arrow, transform, unityCoordinates = false) {
   const position = transform?.position || {};
   const rotation = transform?.rotation || {};
   const scale = transform?.scale || DEFAULT_ARROW_SCALE;
-  arrow.position.set(Number(position.x) || 0, Number(position.y) || 0, Number(position.z) || 0);
+  arrow.rotation.order = unityCoordinates ? 'ZXY' : 'XYZ';
   arrow.rotation.set(
     THREE.MathUtils.degToRad(Number(rotation.x) || 0),
     THREE.MathUtils.degToRad(Number(rotation.y) || 0),
@@ -316,15 +333,31 @@ function arrowTransformFromData(arrow, transform) {
     scaleValue(scale.y, DEFAULT_ARROW_SCALE.y),
     scaleValue(scale.z, DEFAULT_ARROW_SCALE.z),
   );
+  const serializedPosition = new THREE.Vector3(
+    Number(position.x) || 0,
+    Number(position.y) || 0,
+    Number(position.z) || 0,
+  );
+  if (unityCoordinates) {
+    const unityTipOffset = getUnityArrowTipOffset(scale, arrow.quaternion);
+    const controllerPoint = serializedPosition.add(unityTipOffset);
+    const modelPoint = controllerPoint.sub(UNITY_MODEL_ROOT_OFFSET).multiplyScalar(1 / UNITY_MODEL_UNIT_SCALE);
+    arrow.userData.tipAnchor = modelPoint;
+    arrow.position.copy(modelPoint).sub(getArrowTipOffset(arrow));
+  } else {
+    arrow.position.copy(serializedPosition);
+    arrow.userData.tipAnchor = arrow.position.clone().add(getArrowTipOffset(arrow));
+  }
 }
 
 function dataFromArrow(arrow) {
+  const euler = new THREE.Euler().setFromQuaternion(arrow.quaternion, 'XYZ');
   return {
     position: { x: arrow.position.x, y: arrow.position.y, z: arrow.position.z },
     rotation: {
-      x: THREE.MathUtils.radToDeg(arrow.rotation.x),
-      y: THREE.MathUtils.radToDeg(arrow.rotation.y),
-      z: THREE.MathUtils.radToDeg(arrow.rotation.z),
+      x: THREE.MathUtils.radToDeg(euler.x),
+      y: THREE.MathUtils.radToDeg(euler.y),
+      z: THREE.MathUtils.radToDeg(euler.z),
     },
     scale: {
       x: arrow.scale.x * 5,
@@ -332,6 +365,43 @@ function dataFromArrow(arrow) {
       z: arrow.scale.z * 5,
     },
   };
+}
+
+function unityDataFromArrow(arrow) {
+  const scale = {
+    x: arrow.scale.x * 5,
+    y: arrow.scale.y * 5,
+    z: arrow.scale.z * 5,
+  };
+  const tipAnchor = arrow.userData.tipAnchor || arrow.position.clone().add(getArrowTipOffset(arrow));
+  const controllerPoint = tipAnchor.clone().multiplyScalar(UNITY_MODEL_UNIT_SCALE).add(UNITY_MODEL_ROOT_OFFSET);
+  const unityTipOffset = getUnityArrowTipOffset(scale, arrow.quaternion);
+  const euler = new THREE.Euler().setFromQuaternion(arrow.quaternion, 'ZXY');
+  return {
+    position: {
+      x: controllerPoint.x - unityTipOffset.x,
+      y: controllerPoint.y - unityTipOffset.y,
+      z: controllerPoint.z - unityTipOffset.z,
+    },
+    rotation: {
+      x: THREE.MathUtils.radToDeg(euler.x),
+      y: THREE.MathUtils.radToDeg(euler.y),
+      z: THREE.MathUtils.radToDeg(euler.z),
+    },
+    scale,
+  };
+}
+
+function unityDataFromJarvisTransform(transform) {
+  const arrow = createArrow();
+  arrowTransformFromData(arrow, transform);
+  const unityTransform = unityDataFromArrow(arrow);
+  arrow.traverse((child) => {
+    if (!child.isMesh) return;
+    child.geometry.dispose();
+    child.material.dispose();
+  });
+  return unityTransform;
 }
 
 function removeArrowObjects() {
@@ -356,7 +426,7 @@ function renderCurrentArrows() {
     const colors = colorsForStep();
     transforms.forEach((transform, index) => {
       const arrow = createArrow();
-      arrowTransformFromData(arrow, transform);
+      arrowTransformFromData(arrow, transform, state.unityTransformSteps.has(currentStep()));
       arrow.userData.color = colors[index] || DEFAULT_ARROW_COLOR;
       (state.modelRoot || scene).add(arrow);
       state.arrowObjects.push(arrow);
@@ -515,6 +585,8 @@ function renderTransformFields() {
   colorInput.setAttribute('aria-label', 'Arrow color (JARVIS only; not included in exported JSON)');
   colorInput.addEventListener('input', () => {
     arrow.userData.color = colorInput.value;
+    state.nextArrowColor = colorInput.value;
+    $('#next-arrow-color').value = colorInput.value;
     colorsForStep()[state.currentArrowIndex] = colorInput.value;
     updateArrowAppearance(arrow, true);
     const icon = $('#arrow-list').children[state.currentArrowIndex]?.querySelector('.arrow-row-icon');
@@ -580,23 +652,42 @@ function renderTransformFields() {
 function syncCurrentStepData() {
   const step = currentStep();
   if (!step) return;
+  state.unityTransformSteps.delete(step);
   step.arrowsApplicable = state.arrowObjects.length > 0;
   step.animationIndicator = state.arrowObjects.length ? state.arrowObjects.map(dataFromArrow) : null;
+}
+
+function workflowForUnityExport() {
+  const workflow = JSON.parse(JSON.stringify(state.workflow));
+  workflow.sop.forEach((sceneData, sceneIndex) => {
+    sceneData.steps.forEach((step, stepIndex) => {
+      if (!Array.isArray(step.animationIndicator) || state.unityTransformSteps.has(currentStepFor(sceneIndex, stepIndex))) return;
+      const active = sceneIndex === state.currentSceneIndex && stepIndex === state.currentStepIndex;
+      step.animationIndicator = active
+        ? state.arrowObjects.map(unityDataFromArrow)
+        : step.animationIndicator.map(unityDataFromJarvisTransform);
+    });
+  });
+  return workflow;
+}
+
+function currentStepFor(sceneIndex, stepIndex) {
+  return state.workflow?.sop?.[sceneIndex]?.steps?.[stepIndex];
 }
 
 function addArrowAt(hit) {
   const step = currentStep();
   if (!step || !state.modelRoot) return;
   const arrow = createArrow();
-  const localPoint = state.modelRoot.worldToLocal(hit.point.clone());
   const worldNormal = hit.face.normal.clone()
     .applyMatrix3(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld))
     .normalize();
   const modelNormalMatrix = new THREE.Matrix3().getNormalMatrix(state.modelRoot.matrixWorld).invert();
   const localNormal = worldNormal.clone().applyMatrix3(modelNormalMatrix).normalize();
   arrow.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), localNormal);
-  arrow.userData.tipAnchor = localPoint.clone();
-  arrow.position.copy(localPoint).sub(getArrowTipOffset(arrow));
+  const clearance = Math.max(state.modelSize * ARROW_SURFACE_CLEARANCE_FACTOR, 0.002);
+  arrow.userData.tipAnchor = state.modelRoot.worldToLocal(hit.point.clone().addScaledVector(worldNormal, clearance));
+  arrow.position.copy(arrow.userData.tipAnchor).sub(getArrowTipOffset(arrow));
   state.modelRoot.add(arrow);
   state.arrowObjects.push(arrow);
   state.currentArrowIndex = state.arrowObjects.length - 1;
@@ -835,6 +926,7 @@ async function openWorkflow(file) {
   try {
     let parsed;
     let workflowFile = file.name;
+    let workflowExportName = file.name.replace(/\.[^.]+$/, '');
     let selectedScenario = null;
     if (/\.xlsx$/i.test(file.name)) {
       const workbook = await readExcelScenarios(file);
@@ -843,6 +935,7 @@ async function openWorkflow(file) {
       parsed = buildWorkflowFromScenario(workbook.rows, workbook.headerRowIndex, selectedScenario);
       if (!parsed.sop.length) throw new Error(`No sequence steps were found in the "${selectedScenario.name}" column.`);
       workflowFile = `${selectedScenario.name} · ${file.name}`;
+      workflowExportName = `workflow_${selectedScenario.name}`;
     } else if (/\.xls$/i.test(file.name)) {
       throw new Error('Legacy .xls files are not supported. Save the workbook as .xlsx and retry.');
     } else {
@@ -853,6 +946,13 @@ async function openWorkflow(file) {
     }
     state.workflow = parsed;
     state.workflowFile = workflowFile;
+    state.workflowExportName = workflowExportName;
+    state.unityTransformSteps = new WeakSet();
+    if (/^workflow_CIP$/i.test(workflowExportName) && /\.json$/i.test(file.name)) {
+      parsed.sop.forEach((sceneData) => sceneData.steps.forEach((step) => {
+        if (Array.isArray(step.animationIndicator)) state.unityTransformSteps.add(step);
+      }));
+    }
     state.currentSceneIndex = -1;
     state.currentStepIndex = -1;
     const firstArrowStep = parsed.sop.findIndex((entry) => entry.steps.some((step) => step.arrowsApplicable || Array.isArray(step.animationIndicator)));
@@ -955,28 +1055,26 @@ async function loadModel(files) {
 
 function exportWorkflow() {
   if (!state.workflow) return;
-  const payload = JSON.stringify(state.workflow, null, 2);
+  const isCipWorkflow = /^workflow_CIP$/i.test(state.workflowExportName);
+  const hasLocalArrows = state.workflow.sop.some((sceneData) => sceneData.steps.some((step) =>
+    Array.isArray(step.animationIndicator) && !state.unityTransformSteps.has(step),
+  ));
+  if (isCipWorkflow && hasLocalArrows && !state.modelRoot) {
+    showToast('Load the CIP model before exporting arrow positions.', true);
+    return;
+  }
+  const workflow = isCipWorkflow ? workflowForUnityExport() : state.workflow;
+  const payload = JSON.stringify(workflow, null, 2);
   const blob = new Blob([payload], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
-  const now = new Date();
-  const stamp = [
-    now.getFullYear(),
-    String(now.getMonth() + 1).padStart(2, '0'),
-    String(now.getDate()).padStart(2, '0'),
-    '_',
-    String(now.getHours()).padStart(2, '0'),
-    String(now.getMinutes()).padStart(2, '0'),
-    String(now.getSeconds()).padStart(2, '0'),
-    String(now.getMilliseconds()).padStart(3, '0'),
-  ].join('');
-  const sceneName = (state.workflow.sop?.[state.currentSceneIndex]?.title || state.workflowFile.replace(/\.json$/i, '') || 'Workflow')
-    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').replace(/\s+/g, '_');
+  const fileName = `${(state.workflowExportName || 'workflow')
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').replace(/\s+/g, '_').replace(/[. ]+$/g, '')}.json`;
   anchor.href = url;
-  anchor.download = `JARVIS_${sceneName}_${stamp}.json`;
+  anchor.download = fileName;
   anchor.click();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-  showToast(`Exported JARVIS_${sceneName}_${stamp}.json`);
+  showToast(`Exported ${fileName}`);
 }
 
 function stopPreview() {
@@ -1022,7 +1120,7 @@ function animate(now = 0) {
       const base = previewPositions.get(arrow);
       if (!base) continue;
       const direction = new THREE.Vector3(1, 0, 0).applyQuaternion(arrow.quaternion);
-      const travel = state.modelSize * 0.07 * Math.sin(elapsed * Math.PI * 2.4);
+      const travel = state.modelSize * 0.07 * (1 - Math.cos(elapsed * Math.PI * 2.4)) * 0.5;
       arrow.position.copy(base).addScaledVector(direction, travel);
     }
   }
@@ -1045,6 +1143,9 @@ ui.modelInput.addEventListener('change', (event) => {
 ui.exportButton.addEventListener('click', exportWorkflow);
 ui.placementButton.addEventListener('click', () => setPlacementMode(!state.placementMode));
 ui.previewButton.addEventListener('click', () => state.previewMode ? stopPreview() : startPreview());
+$('#next-arrow-color').addEventListener('input', (event) => {
+  state.nextArrowColor = event.target.value;
+});
 $('#reset-camera').addEventListener('click', fitCamera);
 window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && state.placementMode) setPlacementMode(false);

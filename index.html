@@ -115,6 +115,10 @@
             <div><span class="eyebrow">ARROW MARKERS</span><strong id="arrow-count">0 placed</strong></div>
             <span class="arrow-green-dot"></span>
           </div>
+          <label class="next-arrow-color">
+            <span>NEXT ARROW COLOR · JARVIS ONLY</span>
+            <input id="next-arrow-color" type="color" value="#83f26b" aria-label="Color for next arrows (JARVIS only; not included in exported JSON)" />
+          </label>
           <div class="arrow-list" id="arrow-list"><div class="arrow-empty">No arrows on this step.<br />Enable placement and click the model.</div></div>
           <button class="button place-button" id="place-arrow" disabled><span class="crosshair-icon">⊕</span> Place arrow on model</button>
           <p class="placement-help" id="placement-help">Select a step and load a model to start placing arrows.</p>
@@ -124,7 +128,7 @@
               <div class="transform-empty">Select an arrow to edit its position, rotation, and scale.</div>
             </div>
           </div>
-          <div class="inspector-foot"><span class="green-swatch"></span> Arrow preview color <strong>Signal green</strong></div>
+          <div class="inspector-foot"><span class="green-swatch"></span> Arrow colors are <strong>JARVIS only</strong></div>
         </aside>
       </main>
       <input id="workflow-input" type="file" accept=".json,.xlsx,application/json" hidden />

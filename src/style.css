@@ -151,6 +151,8 @@ button { font: inherit; }
 .arrow-section-heading > div { display: flex; align-items: baseline; gap: 8px; }
 .arrow-section-heading strong { color: #c6c8c9; font-size: 9px; font-weight: 600; }
 .arrow-green-dot { height: 6px; width: 6px; background: var(--green); border-radius: 50%; box-shadow: 0 0 9px #83f26b99; }
+.next-arrow-color { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 1px 7px; color: #8c9195; font: 8px var(--mono); letter-spacing: .5px; }
+.next-arrow-color input { width: 34px; height: 24px; padding: 2px; border: 1px solid #35383c; border-radius: 3px; background: #1c1f22; cursor: pointer; }
 .arrow-list { display: flex; flex: 0 0 auto; flex-direction: column; gap: 5px; min-height: 160px; max-height: 300px; overflow-y: auto; scrollbar-width: auto; scrollbar-color: #69747d #25292c; }
 .arrow-list::-webkit-scrollbar { width: 10px; }
 .arrow-list::-webkit-scrollbar-track { border-radius: 5px; background: #25292c; }
@@ -246,6 +248,8 @@ button { font: inherit; }
 .instruction-card p { color: #394550; }
 .target-tag { border-color: #d5c18e; color: #765714; background: #fffaf0; }
 .arrow-list { scrollbar-color: #8996a0 #e6eaee; }
+.next-arrow-color { color: #5f6b76; }
+.next-arrow-color input { border-color: #cbd4dc; background: #fff; }
 .arrow-list::-webkit-scrollbar-track { background: #e6eaee; }
 .arrow-list::-webkit-scrollbar-thumb { border-color: #e6eaee; background: #8996a0; }
 .arrow-empty { color: #687580; }
