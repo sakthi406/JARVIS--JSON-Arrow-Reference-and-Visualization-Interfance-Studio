@@ -1,6 +1,6 @@
 # JARVIS
 
-**JSON Arrow Reference & Visualization Interface System** is a standalone browser-based tool for placing 3D arrow references on engineering models and exporting those transforms into the existing McDermott SOP workflow JSON format.
+**JSON Arrow Reference & Visualization Interface Studio** is a standalone browser-based tool for placing 3D arrow references on engineering models and exporting those transforms into the existing McDermott SOP workflow JSON format.
 
 ## Run locally
 
