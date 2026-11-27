@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f3f5f7" />
+    <title>JARVIS — JSON Arrow Reference and Visualization Interface Studio</title>
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <a class="brand" href="#" aria-label="JARVIS home">
+          <span class="brand-mark">J</span>
+          <span class="brand-name">JARVIS<span class="brand-dot">.</span></span>
+          <span class="brand-divider"></span>
+          <span class="brand-subtitle">JSON Arrow Reference and Visualization Interface Studio</span>
+        </a>
+        <div class="topbar-status"><span class="status-light"></span><span id="project-status">LOCAL WORKSPACE</span></div>
+        <button class="button button-primary" id="export-button" disabled><span class="download-icon">↓</span> Export JSON</button>
+      </header>
+
+      <main class="workspace">
+        <aside class="workflow-panel panel">
+          <div class="panel-heading">
+            <div>
+              <span class="eyebrow">PROJECT FILES</span>
+              <h1>Workspace</h1>
+            </div>
+            <span class="file-count" id="step-count">—</span>
+          </div>
+          <button class="file-card" id="workflow-upload">
+            <span class="file-symbol">{ }</span>
+            <span class="file-copy"><strong id="workflow-name">Open workflow JSON or Excel</strong><small id="workflow-hint">JSON · XLSX scenario matrix</small></span>
+            <span class="file-action">＋</span>
+          </button>
+          <button class="file-card" id="model-upload">
+            <span class="file-symbol cube-symbol">◇</span>
+            <span class="file-copy"><strong id="model-name">Load 3D model</strong><small id="model-hint">FBX · GLB · GLTF · OBJ · STL</small></span>
+            <span class="file-action">＋</span>
+          </button>
+          <div class="section-label"><span>SCENES &amp; STEPS</span><span class="section-line"></span></div>
+          <nav id="workflow-list" class="workflow-list" aria-label="Workflow scenes and steps">
+            <div class="empty-list">Open a workflow JSON or Excel scenario sheet to see its steps.</div>
+          </nav>
+          <div class="panel-foot"><span class="foot-indicator"></span> Changes stay in this browser session</div>
+        </aside>
+
+        <section class="stage-column">
+          <div class="stage-toolbar">
+            <div class="breadcrumb"><span id="breadcrumb-scene">No workflow loaded</span><span class="crumb-separator">/</span><strong id="breadcrumb-step">Select a step</strong></div>
+            <div class="toolbar-actions">
+              <span class="model-badge" id="model-badge"><span></span> NO MODEL</span>
+              <label class="front-axis-control" title="Auto uses the model's longer horizontal axis; choose another camera axis if needed">
+                UNITY FRONT
+                <select id="front-axis" aria-label="Unity front camera axis">
+                  <option value="auto">Auto</option>
+                  <option value="front">+Z</option>
+                  <option value="back">-Z</option>
+                  <option value="right">+X</option>
+                  <option value="left">-X</option>
+                  <option value="top">+Y</option>
+                  <option value="bottom">-Y</option>
+                </select>
+              </label>
+              <button class="button button-quiet" id="reset-camera" title="Reset camera to the selected Unity front axis">↺ <span>Reset view</span></button>
+              <button class="button button-preview" id="preview-button" disabled>▷ <span>Preview</span></button>
+            </div>
+          </div>
+          <div class="viewport-wrap">
+            <div id="viewport" class="viewport">
+              <div class="viewport-grid"></div>
+              <div class="empty-state" id="empty-state">
+                <div class="empty-orbit"><span class="empty-cube">◇</span></div>
+                <span class="eyebrow">3D REFERENCE WORKSPACE</span>
+                <h2>Bring your model<br />into focus.</h2>
+                <p>Load a model and workflow, then click any point on the model to place a green 3D arrow.</p>
+                <button class="button button-primary" id="empty-model-upload">Load a 3D model <span>→</span></button>
+                <div class="empty-formats">FBX &nbsp;·&nbsp; GLB / GLTF &nbsp;·&nbsp; OBJ &nbsp;·&nbsp; STL</div>
+              </div>
+              <div class="viewport-top-left"><span class="axis-indicator">3D</span><span id="viewport-model-label">MODEL VIEWPORT</span></div>
+              <div class="viewport-top-right"><span class="live-dot"></span><span id="placement-status">RIGHT DRAG · ORBIT</span></div>
+              <div class="view-gizmo" role="group" aria-label="Model view orientation">
+                <span class="gizmo-caption" id="gizmo-view-label">Z+</span>
+                <div class="gizmo-axis">
+                  <button class="gizmo-direction axis-y" type="button" data-view="top" title="View from +Y" aria-label="View from +Y">+Y</button>
+                  <button class="gizmo-direction axis-x-negative" type="button" data-view="left" title="View from -X" aria-label="View from -X">-X</button>
+                  <button class="gizmo-direction axis-z" type="button" data-view="front" title="View from +Z" aria-label="View from +Z">+Z</button>
+                  <button class="gizmo-direction axis-x" type="button" data-view="right" title="View from +X" aria-label="View from +X">+X</button>
+                  <button class="gizmo-direction axis-z-negative" type="button" data-view="back" title="View from -Z" aria-label="View from -Z">-Z</button>
+                  <button class="gizmo-direction axis-y-negative" type="button" data-view="bottom" title="View from -Y" aria-label="View from -Y">-Y</button>
+                </div>
+              </div>
+              <div class="viewport-bottom-left"><span class="hint-key">LEFT CLICK</span> SELECT / PLACE <span class="hint-separator">·</span> <span class="hint-key">RIGHT DRAG</span> ORBIT <span class="hint-separator">·</span> <span class="hint-key">MIDDLE</span> PAN <span class="hint-separator">·</span> <span class="hint-key">SCROLL</span> ZOOM</div>
+              <div class="viewport-bottom-right" id="coordinate-readout">X 0.000 &nbsp; Y 0.000 &nbsp; Z 0.000</div>
+              <div class="preview-caption" id="preview-caption"><span class="pulse-dot"></span> PREVIEW · RIGHT DRAG ORBIT · MIDDLE PAN · SCROLL ZOOM</div>
+            </div>
+            <div class="stage-bottom">
+              <div class="step-progress"><span class="progress-label">STEP PROGRESS</span><span class="progress-track"><span id="progress-fill"></span></span><strong id="progress-value">—</strong></div>
+              <div class="stage-note"><span class="note-icon">i</span><span id="stage-note">Upload a model, then open a workflow to begin.</span></div>
+            </div>
+          </div>
+        </section>
+
+        <aside class="inspector-panel panel">
+          <div class="inspector-heading">
+            <div><span class="eyebrow">STEP INSPECTOR</span><h2 id="inspector-title">No step selected</h2></div>
+            <span class="step-tag" id="step-tag">—</span>
+          </div>
+          <div class="instruction-card">
+            <span class="eyebrow">STEP INSTRUCTION</span>
+            <p id="step-instruction">Select a workflow step to view its content and place arrows.</p>
+            <div id="highlight-target" class="target-tag" hidden></div>
+          </div>
+          <div class="arrow-section-heading">
+            <div><span class="eyebrow">ARROW MARKERS</span><strong id="arrow-count">0 placed</strong></div>
+            <span class="arrow-green-dot"></span>
+          </div>
+          <div class="arrow-list" id="arrow-list"><div class="arrow-empty">No arrows on this step.<br />Enable placement and click the model.</div></div>
+          <button class="button place-button" id="place-arrow" disabled><span class="crosshair-icon">⊕</span> Place arrow on model</button>
+          <p class="placement-help" id="placement-help">Select a step and load a model to start placing arrows.</p>
+          <div class="transform-section">
+            <div class="transform-heading"><span class="eyebrow">TRANSFORM</span><span class="local-badge">LOCAL SPACE</span></div>
+            <div id="transform-fields" class="transform-fields">
+              <div class="transform-empty">Select an arrow to edit its position, rotation, and scale.</div>
+            </div>
+          </div>
+          <div class="inspector-foot"><span class="green-swatch"></span> Arrow preview color <strong>Signal green</strong></div>
+        </aside>
+      </main>
+      <input id="workflow-input" type="file" accept=".json,.xlsx,application/json" hidden />
+      <input id="model-input" type="file" accept=".fbx,.glb,.gltf,.obj,.stl,.bin,.mtl,.png,.jpg,.jpeg,.webp,.tga,.bmp,.dds" multiple hidden />
+      <dialog id="scenario-dialog" class="scenario-dialog">
+        <form method="dialog">
+          <span class="eyebrow">EXCEL WORKFLOW</span>
+          <h2>Choose a scenario</h2>
+          <p>Pick the scenario column to load. Sequence names become sections; each filled cell becomes a numbered step.</p>
+          <label for="scenario-select">Scenario column</label>
+          <select id="scenario-select"></select>
+          <div class="scenario-dialog-actions">
+            <button class="button button-quiet" value="cancel">Cancel</button>
+            <button class="button button-primary" id="load-scenario-button" value="load">Load scenario</button>
+          </div>
+        </form>
+      </dialog>
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
