@@ -35,6 +35,7 @@ const state = {
   currentArrowIndex: -1,
   arrowObjects: [],
   nextArrowColor: '#83f26b',
+  pointerColor: '#ffc963',
   unityTransformSteps: new WeakSet(),
   placementMode: false,
   previewMode: false,
@@ -164,7 +165,7 @@ const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 const hoverMarker = new THREE.Group();
 const hoverMaterial = new THREE.MeshBasicMaterial({
-  color: 0xffc963,
+  color: state.pointerColor,
   side: THREE.DoubleSide,
   transparent: true,
   opacity: 0.92,
@@ -1228,6 +1229,10 @@ ui.placementButton.addEventListener('click', () => setPlacementMode(!state.place
 ui.previewButton.addEventListener('click', () => state.previewMode ? stopPreview() : startPreview());
 $('#next-arrow-color').addEventListener('input', (event) => {
   state.nextArrowColor = event.target.value;
+});
+$('#pointer-color').addEventListener('input', (event) => {
+  state.pointerColor = event.target.value;
+  hoverMaterial.color.set(state.pointerColor);
 });
 $('#reset-camera').addEventListener('click', fitCamera);
 window.addEventListener('keydown', (event) => {

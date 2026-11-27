@@ -121,6 +121,10 @@
           </label>
           <div class="arrow-list" id="arrow-list"><div class="arrow-empty">No arrows on this step.<br />Enable placement and click the model.</div></div>
           <button class="button place-button" id="place-arrow" disabled><span class="crosshair-icon">⊕</span> Place arrow on model</button>
+          <label class="pointer-color-control">
+            <span>POINTER COLOR · JARVIS ONLY</span>
+            <input id="pointer-color" type="color" value="#ffc963" aria-label="On-model pointer color (JARVIS only; not included in exported JSON)" />
+          </label>
           <p class="placement-help" id="placement-help">Select a step and load a model to start placing arrows.</p>
           <div class="transform-section">
             <div class="transform-heading"><span class="eyebrow">TRANSFORM</span><span class="local-badge">LOCAL SPACE</span></div>
@@ -128,7 +132,7 @@
               <div class="transform-empty">Select an arrow to edit its position, rotation, and scale.</div>
             </div>
           </div>
-          <div class="inspector-foot"><span class="green-swatch"></span> Arrow colors are <strong>JARVIS only</strong></div>
+          <div class="inspector-foot"><span class="green-swatch"></span> Arrow and pointer colors are <strong>JARVIS only</strong></div>
         </aside>
       </main>
       <input id="workflow-input" type="file" accept=".json,.xlsx,application/json" hidden />
