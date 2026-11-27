@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import unityArrowUrl from './3D RightArrow.fbx?url';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
@@ -51,8 +52,9 @@ const SELECTED_ARROW_COLOR = '#ffae42';
 const ARROW_SURFACE_CLEARANCE_FACTOR = 0.01;
 const UNITY_MODEL_UNIT_SCALE = 0.01;
 const UNITY_MODEL_ROOT_OFFSET = new THREE.Vector3(0, -0.613, -0.605);
-const UNITY_ARROW_TIP_LOCAL = new THREE.Vector3(-0.01752428, -0.00000871, 0.00062149);
 const arrowColorsByStep = new WeakMap();
+let unityArrowTemplate = null;
+let unityArrowTipLocal = null;
 const scene = new THREE.Scene();
 scene.background = new THREE.Color('#eef1f4');
 const camera = new THREE.PerspectiveCamera(42, 1, 0.01, 100000);
@@ -199,6 +201,7 @@ const currentArrowData = () => {
   const step = currentStep();
   return step?.animationIndicator?.[state.currentArrowIndex] ?? null;
 };
+const isCipWorkflowName = (name) => /^workflow_CIP(?:$|[\s_-])/i.test(name);
 
 function showToast(message, isError = false) {
   ui.toast.textContent = message;
@@ -250,36 +253,66 @@ function fitCamera() {
   axes.scale.setScalar(Math.max(state.modelSize, 0.1));
 }
 
-function createArrow() {
-  const arrow = new THREE.Group();
-  arrow.scale.set(DEFAULT_ARROW_SCALE.x / 5, DEFAULT_ARROW_SCALE.y / 5, DEFAULT_ARROW_SCALE.z / 5);
-  arrow.userData.color = state.nextArrowColor;
-  const green = new THREE.MeshStandardMaterial({
-    color: state.nextArrowColor,
-    emissive: new THREE.Color(state.nextArrowColor).multiplyScalar(0.28),
-    emissiveIntensity: 0.8,
-    metalness: 0.18,
-    roughness: 0.28,
-    depthTest: true,
-  });
-  const shaftLength = Math.max(state.modelSize * 0.13, 0.03);
-  const shaftRadius = Math.max(state.modelSize * 0.009, 0.004);
-  const headLength = shaftLength * 0.42;
-  const headRadius = shaftRadius * 3.2;
-  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(shaftRadius, shaftRadius, shaftLength, 12), green);
-  shaft.rotation.z = -Math.PI / 2;
-  shaft.position.x = -headLength * 0.28;
-  const head = new THREE.Mesh(new THREE.ConeGeometry(headRadius, headLength, 14), green);
-  head.rotation.z = -Math.PI / 2;
-  head.position.x = shaftLength * 0.52;
-  arrow.add(shaft, head);
-  arrow.userData.tipOffset = new THREE.Vector3(shaftLength * 0.52 + headLength * 0.5, 0, 0);
-  arrow.traverse((child) => {
-    if (child.isMesh) {
-      child.renderOrder = 10;
-      child.userData.isJarvisArrow = true;
+function getArrowTipPosition(root) {
+  const rootInverse = root.matrixWorld.clone().invert();
+  const vertex = new THREE.Vector3();
+  let tip = null;
+  root.traverse((object) => {
+    if (!object.isMesh) return;
+    const positions = object.geometry.attributes.position;
+    for (let index = 0; index < positions.count; index += 1) {
+      vertex.fromBufferAttribute(positions, index)
+        .applyMatrix4(object.matrixWorld)
+        .applyMatrix4(rootInverse);
+      if (!tip || vertex.x > tip.x) tip = vertex.clone();
     }
   });
+  if (!tip) throw new Error('The Unity arrow FBX contains no mesh vertices.');
+  return tip;
+}
+
+new FBXLoader().loadAsync(unityArrowUrl).then((fbxModel) => {
+  const arrowMesh = fbxModel.getObjectByName('Arrow');
+  if (!arrowMesh?.isMesh) {
+    throw new Error('The Unity arrow FBX is missing its imported Arrow mesh root.');
+  }
+  arrowMesh.position.set(0, 0, 0);
+  arrowMesh.rotation.set(0, 0, 0);
+  arrowMesh.scale.set(1, 1, 1);
+  const template = new THREE.Group();
+  template.add(fbxModel);
+  template.updateMatrixWorld(true);
+  unityArrowTipLocal = getArrowTipPosition(template);
+  unityArrowTemplate = template;
+  if (currentStep()) renderCurrentArrows();
+}).catch((error) => {
+  showToast(`Could not load the Unity arrow model: ${error.message}`, true);
+});
+
+function createArrow() {
+  if (!unityArrowTemplate || !unityArrowTipLocal) {
+    throw new Error('The Unity arrow model is not ready yet.');
+  }
+  const arrow = new THREE.Group();
+  arrow.scale.set(DEFAULT_ARROW_SCALE.x, DEFAULT_ARROW_SCALE.y, DEFAULT_ARROW_SCALE.z);
+  arrow.userData.color = state.nextArrowColor;
+  arrow.userData.tipOffset = unityArrowTipLocal.clone();
+  const model = unityArrowTemplate.clone(true);
+  model.traverse((child) => {
+    if (!child.isMesh) return;
+    child.geometry = child.geometry.clone();
+    child.material = new THREE.MeshStandardMaterial({
+      color: state.nextArrowColor,
+      emissive: new THREE.Color(state.nextArrowColor).multiplyScalar(0.28),
+      emissiveIntensity: 0.8,
+      metalness: 0.18,
+      roughness: 0.28,
+      depthTest: true,
+    });
+    child.renderOrder = 10;
+    child.userData.isJarvisArrow = true;
+  });
+  arrow.add(model);
   return arrow;
 }
 
@@ -307,27 +340,58 @@ function getArrowTipOffset(arrow) {
   return arrow.userData.tipOffset.clone().multiply(arrow.scale).applyQuaternion(arrow.quaternion);
 }
 
-function getUnityArrowTipOffset(scale, quaternion) {
-  return UNITY_ARROW_TIP_LOCAL.clone()
-    .multiply(new THREE.Vector3(
-      Number.isFinite(Number(scale.x)) ? Number(scale.x) : DEFAULT_ARROW_SCALE.x,
-      Number.isFinite(Number(scale.y)) ? Number(scale.y) : DEFAULT_ARROW_SCALE.y,
-      Number.isFinite(Number(scale.z)) ? Number(scale.z) : DEFAULT_ARROW_SCALE.z,
-    ))
-    .applyQuaternion(quaternion);
+// Unity imports right-handed FBX files (cm) into left-handed Unity space (m)
+// by reflecting X and scaling by 0.01; CIP's model child sits at UNITY_MODEL_ROOT_OFFSET
+// under the animation controller that parents spawned arrows.
+function threeToUnityPosition(point) {
+  return new THREE.Vector3(
+    -point.x * UNITY_MODEL_UNIT_SCALE + UNITY_MODEL_ROOT_OFFSET.x,
+    point.y * UNITY_MODEL_UNIT_SCALE + UNITY_MODEL_ROOT_OFFSET.y,
+    point.z * UNITY_MODEL_UNIT_SCALE + UNITY_MODEL_ROOT_OFFSET.z,
+  );
+}
+
+function unityToThreePosition(point) {
+  return new THREE.Vector3(
+    -(point.x - UNITY_MODEL_ROOT_OFFSET.x) / UNITY_MODEL_UNIT_SCALE,
+    (point.y - UNITY_MODEL_ROOT_OFFSET.y) / UNITY_MODEL_UNIT_SCALE,
+    (point.z - UNITY_MODEL_ROOT_OFFSET.z) / UNITY_MODEL_UNIT_SCALE,
+  );
+}
+
+function flipHandednessQuaternion(quaternion) {
+  return new THREE.Quaternion(quaternion.x, -quaternion.y, -quaternion.z, quaternion.w).normalize();
+}
+
+function unityDataFromThreeTransform(position, quaternion, scale) {
+  const unityPosition = threeToUnityPosition(position);
+  const unityQuaternion = flipHandednessQuaternion(quaternion);
+  // Unity Transform.localEulerAngles applies Z, then X, then Y (Ry * Rx * Rz = Three.js 'YXZ').
+  const euler = new THREE.Euler().setFromQuaternion(unityQuaternion, 'YXZ');
+  return {
+    position: {
+      x: unityPosition.x,
+      y: unityPosition.y,
+      z: unityPosition.z,
+    },
+    rotation: {
+      x: THREE.MathUtils.radToDeg(euler.x),
+      y: THREE.MathUtils.radToDeg(euler.y),
+      z: THREE.MathUtils.radToDeg(euler.z),
+    },
+    scale: {
+      x: scale.x,
+      y: scale.y,
+      z: scale.z,
+    },
+  };
 }
 
 function arrowTransformFromData(arrow, transform, unityCoordinates = false) {
   const position = transform?.position || {};
   const rotation = transform?.rotation || {};
   const scale = transform?.scale || DEFAULT_ARROW_SCALE;
-  arrow.rotation.order = unityCoordinates ? 'ZXY' : 'XYZ';
-  arrow.rotation.set(
-    THREE.MathUtils.degToRad(Number(rotation.x) || 0),
-    THREE.MathUtils.degToRad(Number(rotation.y) || 0),
-    THREE.MathUtils.degToRad(Number(rotation.z) || 0),
-  );
-  const scaleValue = (value, fallback) => (Number.isFinite(Number(value)) ? Number(value) : fallback) / 5;
+  const scaleValue = (value, fallback) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
   arrow.scale.set(
     scaleValue(scale.x, DEFAULT_ARROW_SCALE.x),
     scaleValue(scale.y, DEFAULT_ARROW_SCALE.y),
@@ -338,16 +402,25 @@ function arrowTransformFromData(arrow, transform, unityCoordinates = false) {
     Number(position.y) || 0,
     Number(position.z) || 0,
   );
+  arrow.rotation.order = 'XYZ';
   if (unityCoordinates) {
-    const unityTipOffset = getUnityArrowTipOffset(scale, arrow.quaternion);
-    const controllerPoint = serializedPosition.add(unityTipOffset);
-    const modelPoint = controllerPoint.sub(UNITY_MODEL_ROOT_OFFSET).multiplyScalar(1 / UNITY_MODEL_UNIT_SCALE);
-    arrow.userData.tipAnchor = modelPoint;
-    arrow.position.copy(modelPoint).sub(getArrowTipOffset(arrow));
+    const unityQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(
+      THREE.MathUtils.degToRad(Number(rotation.x) || 0),
+      THREE.MathUtils.degToRad(Number(rotation.y) || 0),
+      THREE.MathUtils.degToRad(Number(rotation.z) || 0),
+      'YXZ',
+    ));
+    arrow.quaternion.copy(flipHandednessQuaternion(unityQuaternion));
+    arrow.position.copy(unityToThreePosition(serializedPosition));
   } else {
+    arrow.rotation.set(
+      THREE.MathUtils.degToRad(Number(rotation.x) || 0),
+      THREE.MathUtils.degToRad(Number(rotation.y) || 0),
+      THREE.MathUtils.degToRad(Number(rotation.z) || 0),
+    );
     arrow.position.copy(serializedPosition);
-    arrow.userData.tipAnchor = arrow.position.clone().add(getArrowTipOffset(arrow));
   }
+  arrow.userData.tipAnchor = arrow.position.clone().add(getArrowTipOffset(arrow));
 }
 
 function dataFromArrow(arrow) {
@@ -360,48 +433,42 @@ function dataFromArrow(arrow) {
       z: THREE.MathUtils.radToDeg(euler.z),
     },
     scale: {
-      x: arrow.scale.x * 5,
-      y: arrow.scale.y * 5,
-      z: arrow.scale.z * 5,
+      x: arrow.scale.x,
+      y: arrow.scale.y,
+      z: arrow.scale.z,
     },
   };
 }
 
 function unityDataFromArrow(arrow) {
-  const scale = {
-    x: arrow.scale.x * 5,
-    y: arrow.scale.y * 5,
-    z: arrow.scale.z * 5,
-  };
-  const tipAnchor = arrow.userData.tipAnchor || arrow.position.clone().add(getArrowTipOffset(arrow));
-  const controllerPoint = tipAnchor.clone().multiplyScalar(UNITY_MODEL_UNIT_SCALE).add(UNITY_MODEL_ROOT_OFFSET);
-  const unityTipOffset = getUnityArrowTipOffset(scale, arrow.quaternion);
-  const euler = new THREE.Euler().setFromQuaternion(arrow.quaternion, 'ZXY');
-  return {
-    position: {
-      x: controllerPoint.x - unityTipOffset.x,
-      y: controllerPoint.y - unityTipOffset.y,
-      z: controllerPoint.z - unityTipOffset.z,
-    },
-    rotation: {
-      x: THREE.MathUtils.radToDeg(euler.x),
-      y: THREE.MathUtils.radToDeg(euler.y),
-      z: THREE.MathUtils.radToDeg(euler.z),
-    },
-    scale,
-  };
+  return unityDataFromThreeTransform(arrow.position, arrow.quaternion, {
+    x: arrow.scale.x,
+    y: arrow.scale.y,
+    z: arrow.scale.z,
+  });
 }
 
 function unityDataFromJarvisTransform(transform) {
-  const arrow = createArrow();
-  arrowTransformFromData(arrow, transform);
-  const unityTransform = unityDataFromArrow(arrow);
-  arrow.traverse((child) => {
-    if (!child.isMesh) return;
-    child.geometry.dispose();
-    child.material.dispose();
+  const position = transform?.position || {};
+  const rotation = transform?.rotation || {};
+  const scale = transform?.scale || DEFAULT_ARROW_SCALE;
+  const scaleValue = (value, fallback) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
+  const threePosition = new THREE.Vector3(
+    Number(position.x) || 0,
+    Number(position.y) || 0,
+    Number(position.z) || 0,
+  );
+  const threeQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(
+    THREE.MathUtils.degToRad(Number(rotation.x) || 0),
+    THREE.MathUtils.degToRad(Number(rotation.y) || 0),
+    THREE.MathUtils.degToRad(Number(rotation.z) || 0),
+    'XYZ',
+  ));
+  return unityDataFromThreeTransform(threePosition, threeQuaternion, {
+    x: scaleValue(scale.x, DEFAULT_ARROW_SCALE.x),
+    y: scaleValue(scale.y, DEFAULT_ARROW_SCALE.y),
+    z: scaleValue(scale.z, DEFAULT_ARROW_SCALE.z),
   });
-  return unityTransform;
 }
 
 function removeArrowObjects() {
@@ -422,7 +489,7 @@ function removeArrowObjects() {
 function renderCurrentArrows() {
   removeArrowObjects();
   const transforms = currentStep()?.animationIndicator;
-  if (Array.isArray(transforms)) {
+  if (unityArrowTemplate && Array.isArray(transforms)) {
     const colors = colorsForStep();
     transforms.forEach((transform, index) => {
       const arrow = createArrow();
@@ -597,7 +664,7 @@ function renderTransformFields() {
   const groups = [
     { key: 'position', title: 'POSITION · MODEL UNITS', values: [arrow.position.x, arrow.position.y, arrow.position.z], css: 'pos' },
     { key: 'rotation', title: 'ROTATION · DEGREES', values: [arrow.rotation.x, arrow.rotation.y, arrow.rotation.z].map(THREE.MathUtils.radToDeg), css: 'rot' },
-    { key: 'scale', title: 'SCALE · UNITY REFERENCE', values: [arrow.scale.x * 5, arrow.scale.y * 5, arrow.scale.z * 5], css: 'scale' },
+    { key: 'scale', title: 'SCALE · UNITY REFERENCE', values: [arrow.scale.x, arrow.scale.y, arrow.scale.z], css: 'scale' },
   ];
   groups.forEach((group) => {
     const wrapper = document.createElement('div');
@@ -627,8 +694,9 @@ function renderTransformFields() {
           return;
         }
         const vec = group.key === 'position' ? arrow.position : group.key === 'rotation' ? arrow.rotation : arrow.scale;
-        const converted = group.key === 'rotation' ? THREE.MathUtils.degToRad(value) : group.key === 'scale' ? value / 5 : value;
+        const converted = group.key === 'rotation' ? THREE.MathUtils.degToRad(value) : value;
         vec[axis] = converted;
+        if (group.key === 'rotation') delete arrow.userData.previewDirection;
         if (arrow.userData.tipAnchor) {
           if (group.key === 'position') arrow.userData.tipAnchor.copy(arrow.position).add(getArrowTipOffset(arrow));
           else arrow.position.copy(arrow.userData.tipAnchor).sub(getArrowTipOffset(arrow));
@@ -678,6 +746,10 @@ function currentStepFor(sceneIndex, stepIndex) {
 function addArrowAt(hit) {
   const step = currentStep();
   if (!step || !state.modelRoot) return;
+  if (!unityArrowTemplate) {
+    showToast('The Unity arrow model is still loading. Try placing the arrow again shortly.', true);
+    return;
+  }
   const arrow = createArrow();
   const worldNormal = hit.face.normal.clone()
     .applyMatrix3(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld))
@@ -685,6 +757,7 @@ function addArrowAt(hit) {
   const modelNormalMatrix = new THREE.Matrix3().getNormalMatrix(state.modelRoot.matrixWorld).invert();
   const localNormal = worldNormal.clone().applyMatrix3(modelNormalMatrix).normalize();
   arrow.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), localNormal);
+  arrow.userData.previewDirection = localNormal;
   const clearance = Math.max(state.modelSize * ARROW_SURFACE_CLEARANCE_FACTOR, 0.002);
   arrow.userData.tipAnchor = state.modelRoot.worldToLocal(hit.point.clone().addScaledVector(worldNormal, clearance));
   arrow.position.copy(arrow.userData.tipAnchor).sub(getArrowTipOffset(arrow));
@@ -936,6 +1009,7 @@ async function openWorkflow(file) {
       if (!parsed.sop.length) throw new Error(`No sequence steps were found in the "${selectedScenario.name}" column.`);
       workflowFile = `${selectedScenario.name} · ${file.name}`;
       workflowExportName = `workflow_${selectedScenario.name}`;
+      if (isCipWorkflowName(workflowExportName)) workflowExportName = 'workflow_CIP';
     } else if (/\.xls$/i.test(file.name)) {
       throw new Error('Legacy .xls files are not supported. Save the workbook as .xlsx and retry.');
     } else {
@@ -948,7 +1022,7 @@ async function openWorkflow(file) {
     state.workflowFile = workflowFile;
     state.workflowExportName = workflowExportName;
     state.unityTransformSteps = new WeakSet();
-    if (/^workflow_CIP$/i.test(workflowExportName) && /\.json$/i.test(file.name)) {
+    if (isCipWorkflowName(workflowExportName) && /\.json$/i.test(file.name)) {
       parsed.sop.forEach((sceneData) => sceneData.steps.forEach((step) => {
         if (Array.isArray(step.animationIndicator)) state.unityTransformSteps.add(step);
       }));
@@ -1055,7 +1129,11 @@ async function loadModel(files) {
 
 function exportWorkflow() {
   if (!state.workflow) return;
-  const isCipWorkflow = /^workflow_CIP$/i.test(state.workflowExportName);
+  const isCipWorkflow = isCipWorkflowName(state.workflowExportName);
+  if (isCipWorkflow && !unityArrowTemplate) {
+    showToast('The Unity arrow model is still loading. Try exporting again shortly.', true);
+    return;
+  }
   const hasLocalArrows = state.workflow.sop.some((sceneData) => sceneData.steps.some((step) =>
     Array.isArray(step.animationIndicator) && !state.unityTransformSteps.has(step),
   ));
@@ -1119,7 +1197,8 @@ function animate(now = 0) {
     for (const arrow of state.arrowObjects) {
       const base = previewPositions.get(arrow);
       if (!base) continue;
-      const direction = new THREE.Vector3(1, 0, 0).applyQuaternion(arrow.quaternion);
+      const direction = arrow.userData.previewDirection
+        || new THREE.Vector3(1, 0, 0).applyQuaternion(arrow.quaternion);
       const travel = state.modelSize * 0.07 * (1 - Math.cos(elapsed * Math.PI * 2.4)) * 0.5;
       arrow.position.copy(base).addScaledVector(direction, travel);
     }
