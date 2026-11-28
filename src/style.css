@@ -216,7 +216,24 @@ button { font: inherit; }
 .panel-foot,.autosave-toggle,.clear-autosave,.progress-label,.empty-formats,.placement-help,.transform-empty,.inspector-foot { color: #687580; }
 .file-count,.local-badge { border-color: #d3dae0; color: #596671; }
 .file-card { background: #f7f8fa; border-color: #d9dfe5; }
+.file-row { display: flex; align-items: stretch; gap: 5px; margin-bottom: 8px; }
+.file-row .file-card { margin-bottom: 0; flex: 1; }
+.file-clear-btn { flex-shrink: 0; width: 28px; border: 1px solid #d9dfe5; border-radius: 5px; background: #f7f8fa; color: #a34a3d; font-size: 15px; line-height: 1; cursor: pointer; display: grid; place-items: center; transition: background .16s, border-color .16s, color .16s; }
+.file-clear-btn:hover { background: #fce8e5; border-color: #dca69e; color: #c23e30; }
+.file-clear-btn[hidden] { display: none; }
+.clear-workspace-btn { width: 100%; margin-bottom: 6px; padding: 6px 8px; font-size: 9px; color: #a34a3d; border-color: #e4c4bf; }
+.clear-workspace-btn:hover:not(:disabled) { background: #fce8e5; border-color: #d68b80; color: #c23e30; }
 .file-card:hover { background: #fff4f1; border-color: #dca69e; }
+.unity-prefab-card { margin-top: 6px; border: 1px solid #d9dfe5; border-radius: 5px; background: #f7f8fa; overflow: hidden; flex-shrink: 0; }
+.unity-prefab-summary { list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 7px 9px; cursor: pointer; font: 8px var(--mono); letter-spacing: .5px; color: #596671; user-select: none; }
+.unity-prefab-summary::-webkit-details-marker { display: none; }
+.unity-prefab-summary:hover { background: #edf1f4; }
+.unity-prefab-badge { max-width: 112px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 8px var(--mono); color: #315f9e; background: #edf4fc; border: 1px solid #c4d7ee; border-radius: 3px; padding: 2px 5px; }
+.unity-prefab-body { border-top: 1px solid #e1e5e9; padding: 8px 9px 9px; display: flex; flex-direction: column; gap: 7px; background: #fff; }
+.unity-prefab-actions { display: flex; gap: 5px; }
+.unity-prefab-btn { flex: 1; font-size: 9px; padding: 5px 7px; }
+.unity-prefab-reset { font-size: 9px; padding: 5px 7px; }
+.unity-prefab-help { margin: 0; font-size: 8px; line-height: 1.4; color: #687580; }
 .file-symbol { background: #fff0ed; }
 .cube-symbol { background: #fff7e6; }
 .section-line,.panel-foot,.transform-section,.inspector-foot { border-color: #e1e5e9; }

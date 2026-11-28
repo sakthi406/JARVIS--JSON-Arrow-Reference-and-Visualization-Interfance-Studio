@@ -24,6 +24,13 @@ const ui = {
   toast: $('#toast'),
 };
 
+const defaultUnityModelTransform = () => ({
+  position: { x: 0, y: 0, z: 0 },
+  rotation: { x: 0, y: 0, z: 0 },
+  scale: { x: 1, y: 1, z: 1 },
+  source: '',
+});
+
 const state = {
   workflow: null,
   workflowFile: '',
@@ -44,6 +51,8 @@ const state = {
   modelSize: 1,
   modelDimensions: new THREE.Vector3(1, 1, 1),
   modelCenter: new THREE.Vector3(),
+  modelMetersPerUnit: 0.01,
+  unityModelTransform: defaultUnityModelTransform(),
   frontViewKey: 'front',
   frontAxisAuto: true,
 };
@@ -53,9 +62,9 @@ const DEFAULT_ARROW_COLOR = '#83f26b';
 const SELECTED_ARROW_COLOR = '#ffae42';
 const ARROW_SURFACE_CLEARANCE_FACTOR = 0.015;
 const UNITY_MODEL_UNIT_SCALE = 0.01;
+const UNITY_ARROW_UNIT_SCALE = 0.01; // 3D RightArrow.fbx UnitScaleFactor = 1 (cm -> m)
 const UNITY_ARROW_ANIMATION_TRAVEL = 0.0253; // 3D Arrow.anim local X travel in Unity meters (at scale = 1)
 const UNITY_ARROW_ANIMATION_PERIOD = 2 / 3; // 3D Arrow.anim loop duration in seconds
-const UNITY_MODEL_ROOT_OFFSET = new THREE.Vector3(0, -0.613, -0.605);
 const arrowColorsByStep = new WeakMap();
 let unityArrowTemplate = null;
 let unityArrowTipLocal = null;
@@ -292,6 +301,7 @@ function makeAutosaveDraft() {
     nextArrowColor: state.nextArrowColor,
     pointerColor: state.pointerColor,
     modelFile: state.modelFile,
+    unityModelTransform: JSON.parse(JSON.stringify(state.unityModelTransform)),
   };
 }
 
@@ -347,7 +357,7 @@ function filesFromAutosaveRecord(savedAssets) {
 
 async function restoreSavedModel(savedAssets) {
   const files = filesFromAutosaveRecord(savedAssets);
-  return files.length ? loadModel(files) : false;
+  return files.length ? loadModel(files, { preserveUnityTransform: true }) : false;
 }
 
 async function restoreAutosaveDraft(draft) {
@@ -355,6 +365,8 @@ async function restoreAutosaveDraft(draft) {
   state.workflow = draft.workflow;
   state.workflowFile = draft.workflowFile || 'Restored workflow';
   state.workflowExportName = draft.workflowExportName || 'workflow';
+  state.unityModelTransform = normalizeUnityModelTransform(draft.unityModelTransform);
+  renderUnityModelTransformControls();
   state.currentSceneIndex = -1;
   state.currentStepIndex = -1;
   state.currentArrowIndex = -1;
@@ -449,7 +461,7 @@ function fitCamera() {
   const radius = Math.max(state.modelSize * 1.8, 0.1);
   const lightScale = state.modelSize * 1.5;
   if (state.frontAxisAuto) {
-    state.frontViewKey = state.modelDimensions.x > state.modelDimensions.z ? 'right' : 'front';
+    state.frontViewKey = 'front';
   }
   $('#front-axis').value = state.frontAxisAuto ? 'auto' : state.frontViewKey;
   const frontOrientation = viewDirections[state.frontViewKey];
@@ -512,15 +524,22 @@ new FBXLoader().loadAsync(unityArrowUrl).then((fbxModel) => {
   showToast(`Could not load the Unity arrow model: ${error.message}`, true);
 });
 
+function getArrowMeshUnitScale() {
+  const metersPerUnit = state.modelMetersPerUnit > 0 ? state.modelMetersPerUnit : UNITY_MODEL_UNIT_SCALE;
+  return UNITY_ARROW_UNIT_SCALE / metersPerUnit;
+}
+
 function createArrow() {
   if (!unityArrowTemplate || !unityArrowTipLocal) {
     throw new Error('The Unity arrow model is not ready yet.');
   }
+  const meshUnitScale = getArrowMeshUnitScale();
   const arrow = new THREE.Group();
   arrow.scale.set(DEFAULT_ARROW_SCALE.x, DEFAULT_ARROW_SCALE.y, DEFAULT_ARROW_SCALE.z);
   arrow.userData.color = state.nextArrowColor;
-  arrow.userData.tipOffset = unityArrowTipLocal.clone();
+  arrow.userData.tipOffset = unityArrowTipLocal.clone().multiplyScalar(meshUnitScale);
   const model = unityArrowTemplate.clone(true);
+  model.scale.setScalar(meshUnitScale);
   model.traverse((child) => {
     if (!child.isMesh) return;
     child.geometry = child.geometry.clone();
@@ -563,32 +582,136 @@ function getArrowTipOffset(arrow) {
   return arrow.userData.tipOffset.clone().multiply(arrow.scale).applyQuaternion(arrow.quaternion);
 }
 
-// Unity imports right-handed FBX files (cm) into left-handed Unity space (m)
-// by reflecting X and scaling by 0.01; CIP's model child sits at UNITY_MODEL_ROOT_OFFSET
-// under the animation controller that parents spawned arrows.
-function threeToUnityPosition(point) {
-  return new THREE.Vector3(
-    -point.x * UNITY_MODEL_UNIT_SCALE + UNITY_MODEL_ROOT_OFFSET.x,
-    point.y * UNITY_MODEL_UNIT_SCALE + UNITY_MODEL_ROOT_OFFSET.y,
-    point.z * UNITY_MODEL_UNIT_SCALE + UNITY_MODEL_ROOT_OFFSET.z,
-  );
+function normalizeUnityModelTransform(raw) {
+  const base = defaultUnityModelTransform();
+  if (!raw || typeof raw !== 'object') return base;
+  const num = (value, fallback) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
+  const nonZero = (value, fallback) => {
+    const n = num(value, fallback);
+    return Math.abs(n) > 1e-6 ? n : fallback;
+  };
+  return {
+    position: {
+      x: num(raw.position?.x, 0),
+      y: num(raw.position?.y, 0),
+      z: num(raw.position?.z, 0),
+    },
+    rotation: {
+      x: num(raw.rotation?.x, 0),
+      y: num(raw.rotation?.y, 0),
+      z: num(raw.rotation?.z, 0),
+    },
+    scale: {
+      x: nonZero(raw.scale?.x, 1),
+      y: nonZero(raw.scale?.y, 1),
+      z: nonZero(raw.scale?.z, 1),
+    },
+    source: typeof raw.source === 'string' ? raw.source : '',
+  };
 }
 
-function unityToThreePosition(point) {
-  return new THREE.Vector3(
-    -(point.x - UNITY_MODEL_ROOT_OFFSET.x) / UNITY_MODEL_UNIT_SCALE,
-    (point.y - UNITY_MODEL_ROOT_OFFSET.y) / UNITY_MODEL_UNIT_SCALE,
-    (point.z - UNITY_MODEL_ROOT_OFFSET.z) / UNITY_MODEL_UNIT_SCALE,
+function getUnityModelTransform() {
+  const t = state.unityModelTransform;
+  const pos = new THREE.Vector3(
+    Number(t.position?.x) || 0,
+    Number(t.position?.y) || 0,
+    Number(t.position?.z) || 0,
   );
+  // Unity Transform.localEulerAngles applies Z, then X, then Y (Ry * Rx * Rz = Three.js 'YXZ').
+  const quat = new THREE.Quaternion().setFromEuler(new THREE.Euler(
+    THREE.MathUtils.degToRad(Number(t.rotation?.x) || 0),
+    THREE.MathUtils.degToRad(Number(t.rotation?.y) || 0),
+    THREE.MathUtils.degToRad(Number(t.rotation?.z) || 0),
+    'YXZ',
+  ));
+  const scale = new THREE.Vector3(
+    Math.abs(Number(t.scale?.x)) > 1e-6 ? Number(t.scale.x) : 1,
+    Math.abs(Number(t.scale?.y)) > 1e-6 ? Number(t.scale.y) : 1,
+    Math.abs(Number(t.scale?.z)) > 1e-6 ? Number(t.scale.z) : 1,
+  );
+  const uniformScale = (Math.abs(scale.x) + Math.abs(scale.y) + Math.abs(scale.z)) / 3;
+  return { pos, quat, scale, uniformScale };
+}
+
+function renderUnityModelTransformControls() {
+  const t = state.unityModelTransform;
+  const fmt = (value, decimals = 3) => {
+    const clean = Math.abs(value) < 1e-7 ? 0 : value;
+    return Number(clean.toFixed(decimals)).toString();
+  };
+  const fields = {
+    'unity-model-pos-x': fmt(t.position.x, 4),
+    'unity-model-pos-y': fmt(t.position.y, 4),
+    'unity-model-pos-z': fmt(t.position.z, 4),
+    'unity-model-rot-x': fmt(t.rotation.x, 3),
+    'unity-model-rot-y': fmt(t.rotation.y, 3),
+    'unity-model-rot-z': fmt(t.rotation.z, 3),
+    'unity-model-scale-x': fmt(t.scale.x, 4),
+    'unity-model-scale-y': fmt(t.scale.y, 4),
+    'unity-model-scale-z': fmt(t.scale.z, 4),
+  };
+  Object.entries(fields).forEach(([id, value]) => {
+    const input = document.getElementById(id);
+    if (input) input.value = value;
+  });
+  const badge = $('#unity-prefab-badge');
+  const help = $('#unity-prefab-help');
+  const isIdentity = Math.abs(t.position.x) < 1e-6 && Math.abs(t.position.y) < 1e-6 && Math.abs(t.position.z) < 1e-6
+    && Math.abs(t.rotation.x) < 1e-6 && Math.abs(t.rotation.y) < 1e-6 && Math.abs(t.rotation.z) < 1e-6
+    && Math.abs(t.scale.x - 1) < 1e-6 && Math.abs(t.scale.y - 1) < 1e-6 && Math.abs(t.scale.z - 1) < 1e-6;
+  if (badge) {
+    badge.textContent = t.source || (isIdentity ? '0, 0, 0' : 'Custom');
+    badge.title = `Pos(${fmt(t.position.x, 3)}, ${fmt(t.position.y, 3)}, ${fmt(t.position.z, 3)}) Rot(${fmt(t.rotation.x, 1)}°, ${fmt(t.rotation.y, 1)}°, ${fmt(t.rotation.z, 1)}°)`;
+  }
+  if (help) {
+    help.textContent = t.source
+      ? `Synced from ${t.source}. Arrows export in Unity animationController space.`
+      : 'Matches the FBX child Transform under Unity\'s animationController.';
+  }
 }
 
 function flipHandednessQuaternion(quaternion) {
   return new THREE.Quaternion(quaternion.x, -quaternion.y, -quaternion.z, quaternion.w).normalize();
 }
 
+// Unity imports right-handed FBX files into left-handed Unity space (meters) by
+// reflecting X and scaling by UnitScaleFactor * 0.01, then places the model child
+// under animationController using state.unityModelTransform (pos, rot, scale).
+function threeToUnityPosition(point) {
+  const unitScale = state.modelMetersPerUnit > 0 ? state.modelMetersPerUnit : UNITY_MODEL_UNIT_SCALE;
+  const { pos, quat, scale } = getUnityModelTransform();
+  return new THREE.Vector3(-point.x * unitScale, point.y * unitScale, point.z * unitScale)
+    .multiply(scale)
+    .applyQuaternion(quat)
+    .add(pos);
+}
+
+function unityToThreePosition(point) {
+  const unitScale = state.modelMetersPerUnit > 0 ? state.modelMetersPerUnit : UNITY_MODEL_UNIT_SCALE;
+  const { pos, quat, scale } = getUnityModelTransform();
+  const local = point.clone().sub(pos).applyQuaternion(quat.clone().invert());
+  return new THREE.Vector3(
+    -(local.x / scale.x) / unitScale,
+    (local.y / scale.y) / unitScale,
+    (local.z / scale.z) / unitScale,
+  );
+}
+
+function threeToUnityQuaternion(quaternion) {
+  const { quat } = getUnityModelTransform();
+  return quat.clone().multiply(flipHandednessQuaternion(quaternion)).normalize();
+}
+
+function unityToThreeQuaternion(unityQuaternion) {
+  const { quat } = getUnityModelTransform();
+  const modelLocalUnityQuat = quat.clone().invert().multiply(unityQuaternion).normalize();
+  return flipHandednessQuaternion(modelLocalUnityQuat);
+}
+
 function unityDataFromThreeTransform(position, quaternion, scale) {
+  const { uniformScale } = getUnityModelTransform();
   const unityPosition = threeToUnityPosition(position);
-  const unityQuaternion = flipHandednessQuaternion(quaternion);
+  const unityQuaternion = threeToUnityQuaternion(quaternion);
   // Unity Transform.localEulerAngles applies Z, then X, then Y (Ry * Rx * Rz = Three.js 'YXZ').
   const euler = new THREE.Euler().setFromQuaternion(unityQuaternion, 'YXZ');
   return {
@@ -603,9 +726,9 @@ function unityDataFromThreeTransform(position, quaternion, scale) {
       z: THREE.MathUtils.radToDeg(euler.z),
     },
     scale: {
-      x: scale.x,
-      y: scale.y,
-      z: scale.z,
+      x: scale.x * uniformScale,
+      y: scale.y * uniformScale,
+      z: scale.z * uniformScale,
     },
   };
 }
@@ -615,10 +738,12 @@ function arrowTransformFromData(arrow, transform, unityCoordinates = false) {
   const rotation = transform?.rotation || {};
   const scale = transform?.scale || DEFAULT_ARROW_SCALE;
   const scaleValue = (value, fallback) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
+  const { uniformScale } = getUnityModelTransform();
+  const scaleDivisor = unityCoordinates ? uniformScale : 1;
   arrow.scale.set(
-    scaleValue(scale.x, DEFAULT_ARROW_SCALE.x),
-    scaleValue(scale.y, DEFAULT_ARROW_SCALE.y),
-    scaleValue(scale.z, DEFAULT_ARROW_SCALE.z),
+    scaleValue(scale.x, DEFAULT_ARROW_SCALE.x * scaleDivisor) / scaleDivisor,
+    scaleValue(scale.y, DEFAULT_ARROW_SCALE.y * scaleDivisor) / scaleDivisor,
+    scaleValue(scale.z, DEFAULT_ARROW_SCALE.z * scaleDivisor) / scaleDivisor,
   );
   const serializedPosition = new THREE.Vector3(
     Number(position.x) || 0,
@@ -633,7 +758,7 @@ function arrowTransformFromData(arrow, transform, unityCoordinates = false) {
       THREE.MathUtils.degToRad(Number(rotation.z) || 0),
       'YXZ',
     ));
-    arrow.quaternion.copy(flipHandednessQuaternion(unityQuaternion));
+    arrow.quaternion.copy(unityToThreeQuaternion(unityQuaternion));
     arrow.position.copy(unityToThreePosition(serializedPosition));
   } else {
     arrow.rotation.set(
@@ -738,6 +863,7 @@ function renderWorkflow() {
     $('#step-count').textContent = '—';
     ui.exportButton.disabled = true;
     ui.previewButton.disabled = true;
+    updateClearButtons();
     return;
   }
   $('#workflow-name').textContent = state.workflowFile;
@@ -746,6 +872,7 @@ function renderWorkflow() {
   $('#step-count').textContent = `${stepsTotal} STEPS`;
   ui.exportButton.disabled = false;
   ui.previewButton.disabled = false;
+  updateClearButtons();
   state.workflow.sop.forEach((entry, sceneIndex) => {
     const group = document.createElement('section');
     group.className = 'scene-group';
@@ -985,7 +1112,8 @@ function addArrowAt(hit) {
   const localNormal = worldNormal.clone().applyMatrix3(modelNormalMatrix).normalize();
   arrow.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), localNormal);
   arrow.userData.previewDirection = localNormal;
-  const animationTravel = (UNITY_ARROW_ANIMATION_TRAVEL / UNITY_MODEL_UNIT_SCALE) * Math.abs(arrow.scale.x);
+  const unitScale = state.modelMetersPerUnit > 0 ? state.modelMetersPerUnit : UNITY_MODEL_UNIT_SCALE;
+  const animationTravel = (UNITY_ARROW_ANIMATION_TRAVEL / unitScale) * Math.abs(arrow.scale.x);
   const surfaceGap = Math.max(state.modelSize * ARROW_SURFACE_CLEARANCE_FACTOR, 0.002);
   const clearance = animationTravel + surfaceGap;
   arrow.userData.tipAnchor = state.modelRoot.worldToLocal(hit.point.clone().addScaledVector(worldNormal, clearance));
@@ -1251,7 +1379,7 @@ async function openWorkflow(file) {
     state.workflowFile = workflowFile;
     state.workflowExportName = workflowExportName;
     state.unityTransformSteps = new WeakSet();
-    if (isCipWorkflowName(workflowExportName) && /\.json$/i.test(file.name)) {
+    if (/\.json$/i.test(file.name)) {
       parsed.sop.forEach((sceneData) => sceneData.steps.forEach((step) => {
         if (Array.isArray(step.animationIndicator)) state.unityTransformSteps.add(step);
       }));
@@ -1276,6 +1404,291 @@ async function openWorkflow(file) {
   }
 }
 
+function readFbxGlobalSettings(arrayBuffer) {
+  const bytes = new Uint8Array(arrayBuffer);
+  const intKeys = ['UpAxis', 'UpAxisSign', 'FrontAxis', 'FrontAxisSign', 'CoordAxis', 'CoordAxisSign'];
+  const floatKeys = ['UnitScaleFactor'];
+  const settings = {};
+  const binaryHeader = 'Kaydara FBX Binary  \0';
+  let isBinary = bytes.length >= binaryHeader.length;
+  for (let i = 0; isBinary && i < binaryHeader.length; i += 1) {
+    if (bytes[i] !== binaryHeader.charCodeAt(i)) isBinary = false;
+  }
+  if (isBinary) {
+    const view = new DataView(arrayBuffer);
+    const marker = 'GlobalSettings';
+    let gsOffset = -1;
+    const searchLimit = Math.min(bytes.length - marker.length, 262144);
+    for (let i = 0; i <= searchLimit; i += 1) {
+      let match = true;
+      for (let j = 0; j < marker.length; j += 1) {
+        if (bytes[i + j] !== marker.charCodeAt(j)) {
+          match = false;
+          break;
+        }
+      }
+      if (match) {
+        gsOffset = i;
+        break;
+      }
+    }
+    if (gsOffset < 0) return settings;
+    const end = Math.min(bytes.length, gsOffset + 16384);
+    const readProperty = (key, expectedType) => {
+      for (let i = gsOffset + 5; i <= end - key.length - 10; i += 1) {
+        if (bytes[i - 5] !== 0x53 || view.getUint32(i - 4, true) !== key.length) continue;
+        let match = true;
+        for (let j = 0; j < key.length; j += 1) {
+          if (bytes[i + j] !== key.charCodeAt(j)) {
+            match = false;
+            break;
+          }
+        }
+        if (!match) continue;
+        let p = i - 5;
+        for (let s = 0; s < 4; s += 1) {
+          if (p + 5 > end || bytes[p] !== 0x53) {
+            p = -1;
+            break;
+          }
+          p += 5 + view.getUint32(p + 1, true);
+        }
+        if (p === -1 || p >= end) continue;
+        if (expectedType === 'int' && p + 5 <= end && bytes[p] === 0x49) {
+          return view.getInt32(p + 1, true);
+        }
+        if (expectedType === 'float') {
+          if (p + 9 <= end && bytes[p] === 0x44) return view.getFloat64(p + 1, true);
+          if (p + 5 <= end && bytes[p] === 0x46) return view.getFloat32(p + 1, true);
+        }
+      }
+      return undefined;
+    };
+    for (const key of intKeys) {
+      const value = readProperty(key, 'int');
+      if (value !== undefined) settings[key] = value;
+    }
+    for (const key of floatKeys) {
+      const value = readProperty(key, 'float');
+      if (value !== undefined) settings[key] = value;
+    }
+    return settings;
+  }
+  const text = new TextDecoder('latin1').decode(bytes.subarray(0, Math.min(bytes.length, 262144)));
+  const gsIndex = text.indexOf('GlobalSettings:');
+  if (gsIndex < 0) return settings;
+  const block = text.slice(gsIndex, gsIndex + 16384);
+  for (const key of [...intKeys, ...floatKeys]) {
+    const match = block.match(new RegExp(`P:\\s*"${key}"\\s*,[^\\n]*,\\s*(-?\\d+(?:\\.\\d+)?)`));
+    if (match) settings[key] = Number(match[1]);
+  }
+  return settings;
+}
+
+function fbxAxisConversionMatrix(settings) {
+  const upAxis = settings.UpAxis;
+  const frontAxis = settings.FrontAxis;
+  if (![0, 1, 2].includes(upAxis) || ![0, 1, 2].includes(frontAxis) || upAxis === frontAxis) return null;
+  const upSign = settings.UpAxisSign === -1 ? -1 : 1;
+  const frontSign = settings.FrontAxisSign === -1 ? -1 : 1;
+  const axisVector = (axis, sign) => new THREE.Vector3(
+    axis === 0 ? sign : 0,
+    axis === 1 ? sign : 0,
+    axis === 2 ? sign : 0,
+  );
+  const up = axisVector(upAxis, upSign);
+  const front = axisVector(frontAxis, frontSign);
+  // Right-handed basis (right x up = front => right = up x front) matches Three.js (+X right, +Y up, +Z front).
+  const right = up.clone().cross(front);
+  if (right.lengthSq() < 0.5) return null;
+  if (right.x === 1 && up.y === 1 && front.z === 1) return null;
+  const matrix = new THREE.Matrix4();
+  matrix.set(
+    right.x, right.y, right.z, 0,
+    up.x, up.y, up.z, 0,
+    front.x, front.y, front.z, 0,
+    0, 0, 0, 1,
+  );
+  return matrix;
+}
+
+function parseUnityPrefabModelTransform(prefabText, modelFileName = '') {
+  const blocks = prefabText.split(/^--- !u!/m);
+  let animCompId = null;
+  let animGoId = null;
+  const goName = new Map();
+  const goToTr = new Map();
+  const trData = new Map();
+
+  for (const block of blocks) {
+    const hdr = block.match(/^(\d+)\s+&(-?\d+)/);
+    if (!hdr) continue;
+    const [, typeId, id] = hdr;
+    if (typeId === '114') {
+      const animMatch = block.match(/animationController:\s*\{fileID:\s*(-?\d+)\}/);
+      if (animMatch && animMatch[1] !== '0') animCompId = animMatch[1];
+    } else if (typeId === '1') {
+      const nameMatch = block.match(/m_Name:\s*([^\r\n]+)/);
+      if (nameMatch) goName.set(id, nameMatch[1].trim());
+    }
+  }
+
+  let rootTrId = null;
+  for (const block of blocks) {
+    const hdr = block.match(/^(\d+)\s+&(-?\d+)/);
+    if (!hdr) continue;
+    const [, typeId, id] = hdr;
+    if (typeId === '114' && id === animCompId) {
+      animGoId = block.match(/m_GameObject:\s*\{fileID:\s*(-?\d+)\}/)?.[1] || null;
+    } else if (typeId === '4') {
+      const gid = block.match(/m_GameObject:\s*\{fileID:\s*(-?\d+)\}/)?.[1] || null;
+      const father = block.match(/m_Father:\s*\{fileID:\s*(-?\d+)\}/)?.[1] || '0';
+      const pm = block.match(/m_LocalPosition:\s*\{x:\s*([^,]+),\s*y:\s*([^,]+),\s*z:\s*([^}]+)\}/);
+      const rm = block.match(/m_LocalRotation:\s*\{x:\s*([^,]+),\s*y:\s*([^,]+),\s*z:\s*([^,]+),\s*w:\s*([^}]+)\}/);
+      const sm = block.match(/m_LocalScale:\s*\{x:\s*([^,]+),\s*y:\s*([^,]+),\s*z:\s*([^}]+)\}/);
+      if (gid) goToTr.set(gid, id);
+      if (father === '0' && !rootTrId) rootTrId = id;
+      if (pm && rm && sm) {
+        trData.set(id, {
+          id,
+          name: goName.get(gid) || '',
+          father,
+          pos: new THREE.Vector3(Number(pm[1]) || 0, Number(pm[2]) || 0, Number(pm[3]) || 0),
+          quat: new THREE.Quaternion(Number(rm[1]) || 0, Number(rm[2]) || 0, Number(rm[3]) || 0, Number(rm[4]) || 1).normalize(),
+          scale: new THREE.Vector3(Number(sm[1]) || 1, Number(sm[2]) || 1, Number(sm[3]) || 1),
+        });
+      }
+    }
+  }
+
+  const animTrId = (animGoId && goToTr.get(animGoId)) || rootTrId;
+  if (!animTrId) return null;
+
+  const isHelperName = (name) => /^(3d\s*arrow|3d\s*rightarrow|pivotaxis|pivotrotation|worldchecklist|worldnotes|worldinstruction|billboard|crosssection|boundarybox|labelspawner|canvas|text\b)/i.test(name.trim());
+  const normName = (name) => name.replace(/\.[^.]+$/, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const wantedBase = normName(modelFileName || '');
+
+  const composeUpToAnim = (parentId, localMatrix) => {
+    const chain = [];
+    let cur = parentId;
+    let hops = 0;
+    while (cur && cur !== '0' && hops < 24) {
+      if (cur === animTrId) {
+        const result = localMatrix.clone();
+        for (const node of chain) {
+          const m = new THREE.Matrix4().compose(node.pos, node.quat, node.scale);
+          result.premultiply(m);
+        }
+        return result;
+      }
+      const node = trData.get(cur);
+      if (!node) return null;
+      chain.push(node);
+      cur = node.father;
+      hops += 1;
+    }
+    return null;
+  };
+
+  const candidates = [];
+  for (const block of blocks) {
+    if (!block.startsWith('1001 ')) continue;
+    const parentId = block.match(/m_TransformParent:\s*\{fileID:\s*(-?\d+)\}/)?.[1];
+    if (!parentId) continue;
+    const modMatches = [...block.matchAll(/- target:\s*\{fileID:\s*(-?\d+),\s*guid:\s*([0-9a-f]+)[^}]*\}\r?\n\s*propertyPath:\s*([^\r\n]+)\r?\n\s*value:\s*([^\r\n]*)/g)];
+    let instName = '';
+    const byTarget = new Map();
+    for (const [, targetId, , propRaw, valRaw] of modMatches) {
+      const prop = propRaw.trim();
+      const val = valRaw.trim();
+      if (prop === 'm_Name' && (targetId === '919132149155446097' || !instName)) instName = val;
+      if (/^m_Local(Position|Rotation|Scale)\./.test(prop)) {
+        let entry = byTarget.get(targetId);
+        if (!entry) {
+          entry = {};
+          byTarget.set(targetId, entry);
+        }
+        entry[prop] = Number(val);
+      }
+    }
+    if (instName && isHelperName(instName)) continue;
+    const rootMods = byTarget.get('-8679921383154817045') || byTarget.values().next().value || {};
+    const pos = new THREE.Vector3(rootMods['m_LocalPosition.x'] ?? 0, rootMods['m_LocalPosition.y'] ?? 0, rootMods['m_LocalPosition.z'] ?? 0);
+    const quat = new THREE.Quaternion(
+      rootMods['m_LocalRotation.x'] ?? 0,
+      rootMods['m_LocalRotation.y'] ?? 0,
+      rootMods['m_LocalRotation.z'] ?? 0,
+      rootMods['m_LocalRotation.w'] ?? 1,
+    ).normalize();
+    const scale = new THREE.Vector3(
+      rootMods['m_LocalScale.x'] ?? 1,
+      rootMods['m_LocalScale.y'] ?? 1,
+      rootMods['m_LocalScale.z'] ?? 1,
+    );
+    const localMatrix = new THREE.Matrix4().compose(pos, quat, scale);
+    const relMatrix = composeUpToAnim(parentId, localMatrix);
+    if (!relMatrix) continue;
+    const isFbxRoot = byTarget.has('-8679921383154817045');
+    candidates.push({ name: instName, matrix: relMatrix, isFbxRoot, direct: parentId === animTrId });
+  }
+
+  if (!candidates.length) {
+    for (const node of trData.values()) {
+      if (node.id === animTrId || isHelperName(node.name)) continue;
+      const relMatrix = composeUpToAnim(node.father, new THREE.Matrix4().compose(node.pos, node.quat, node.scale));
+      if (relMatrix) candidates.push({ name: node.name, matrix: relMatrix, isFbxRoot: false, direct: node.father === animTrId });
+    }
+  }
+  if (!candidates.length) return null;
+
+  candidates.sort((a, b) => {
+    const score = (c) => {
+      const cn = normName(c.name);
+      let s = 0;
+      if (wantedBase && cn && (cn === wantedBase || cn.includes(wantedBase) || wantedBase.includes(cn))) s += 100;
+      if (c.isFbxRoot) s += 20;
+      if (c.direct) s += 5;
+      return s;
+    };
+    return score(b) - score(a);
+  });
+
+  const best = candidates[0];
+  const pos = new THREE.Vector3();
+  const quat = new THREE.Quaternion();
+  const scale = new THREE.Vector3();
+  best.matrix.decompose(pos, quat, scale);
+  const euler = new THREE.Euler().setFromQuaternion(quat, 'YXZ');
+  return {
+    name: best.name,
+    position: { x: pos.x, y: pos.y, z: pos.z },
+    rotation: {
+      x: THREE.MathUtils.radToDeg(euler.x),
+      y: THREE.MathUtils.radToDeg(euler.y),
+      z: THREE.MathUtils.radToDeg(euler.z),
+    },
+    scale: { x: scale.x, y: scale.y, z: scale.z },
+  };
+}
+
+async function applyUnityPrefabFile(file) {
+  const text = await file.text();
+  const extracted = parseUnityPrefabModelTransform(text, state.modelFile);
+  if (!extracted) {
+    throw new Error(`Could not find an FBX model child transform inside ${file.name}.`);
+  }
+  state.unityModelTransform = normalizeUnityModelTransform({
+    position: extracted.position,
+    rotation: extracted.rotation,
+    scale: extracted.scale,
+    source: file.name,
+  });
+  renderUnityModelTransformControls();
+  if (currentStep() && state.unityTransformSteps.has(currentStep())) renderCurrentArrows();
+  scheduleAutosave();
+  return extracted;
+}
+
 function fileUrlMap(files) {
   const urls = new Map();
   for (const file of files) {
@@ -1284,10 +1697,21 @@ function fileUrlMap(files) {
   return urls;
 }
 
-async function loadModel(files) {
+async function loadModel(files, options = {}) {
   const chosen = Array.from(files || []);
+  const prefabFile = chosen.find((file) => /\.prefab$/i.test(file.name));
   const modelFile = chosen.find((file) => /\.(fbx|glb|gltf|obj|stl)$/i.test(file.name));
   if (!modelFile) {
+    if (prefabFile) {
+      try {
+        const extracted = await applyUnityPrefabFile(prefabFile);
+        showToast(`Applied Unity prefab offset from ${prefabFile.name}${extracted.name ? ` (${extracted.name})` : ''}.`);
+        return true;
+      } catch (error) {
+        showToast(error.message, true);
+        return false;
+      }
+    }
     showToast('Choose an FBX, GLB, GLTF, OBJ, or STL model file.', true);
     return false;
   }
@@ -1303,7 +1727,28 @@ async function loadModel(files) {
     const extension = modelFile.name.split('.').pop().toLowerCase();
     const mainUrl = resources.get(modelFile.name.toLowerCase());
     let root;
-    if (extension === 'fbx') root = await new FBXLoader(manager).loadAsync(mainUrl);
+    let modelMetersPerUnit = UNITY_MODEL_UNIT_SCALE;
+    if (extension === 'fbx') {
+      const buffer = await modelFile.arrayBuffer();
+      const parsed = new FBXLoader(manager).parse(buffer, '');
+      const fbxSettings = readFbxGlobalSettings(buffer);
+      const unitScaleFactor = Number.isFinite(parsed.userData?.unitScaleFactor) && parsed.userData.unitScaleFactor > 0
+        ? parsed.userData.unitScaleFactor
+        : fbxSettings.UnitScaleFactor;
+      if (Number.isFinite(unitScaleFactor) && unitScaleFactor > 0) {
+        modelMetersPerUnit = unitScaleFactor * 0.01;
+      }
+      const axisMatrix = fbxAxisConversionMatrix(fbxSettings);
+      if (axisMatrix) {
+        const wrapper = new THREE.Group();
+        parsed.applyMatrix4(axisMatrix);
+        wrapper.add(parsed);
+        wrapper.userData.unitScaleFactor = unitScaleFactor;
+        root = wrapper;
+      } else {
+        root = parsed;
+      }
+    }
     else if (extension === 'obj') {
       const mtlFile = chosen.find((file) => file.name.toLowerCase().endsWith('.mtl'));
       const loader = new OBJLoader(manager);
@@ -1321,6 +1766,7 @@ async function loadModel(files) {
     } else {
       const gltf = await new GLTFLoader(manager).loadAsync(mainUrl);
       root = gltf.scene;
+      modelMetersPerUnit = 1;
     }
     if (state.modelRoot) {
       scene.remove(state.modelRoot);
@@ -1332,8 +1778,11 @@ async function loadModel(files) {
       });
     }
     removeArrowObjects();
+    const previousModelFile = state.modelFile;
     state.modelRoot = root;
+    state.modelMetersPerUnit = modelMetersPerUnit;
     scene.add(root);
+    root.updateMatrixWorld(true);
     const bounds = new THREE.Box3().setFromObject(root);
     if (bounds.isEmpty()) throw new Error('The model contains no visible geometry.');
     const size = bounds.getSize(new THREE.Vector3());
@@ -1344,6 +1793,14 @@ async function loadModel(files) {
     state.modelFile = modelFile.name;
     state.modelFiles = chosen;
     modelAssetsDirty = true;
+    let prefabMessage = '';
+    if (prefabFile) {
+      const extracted = await applyUnityPrefabFile(prefabFile);
+      prefabMessage = ` · synced ${prefabFile.name}${extracted.name ? ` (${extracted.name})` : ''}`;
+    } else if (!options.preserveUnityTransform && previousModelFile && previousModelFile !== modelFile.name) {
+      state.unityModelTransform = defaultUnityModelTransform();
+      renderUnityModelTransformControls();
+    }
     $('#model-name').textContent = modelFile.name;
     $('#model-hint').textContent = `${extension.toUpperCase()} · model loaded`;
     $('#model-badge').classList.add('loaded');
@@ -1352,7 +1809,8 @@ async function loadModel(files) {
     ui.emptyState.classList.add('hidden');
     $('#project-status').textContent = 'MODEL READY';
     if (currentStep()) renderCurrentArrows();
-    showToast(`Loaded ${modelFile.name}.`);
+    updateClearButtons();
+    showToast(`Loaded ${modelFile.name}${prefabMessage}.`);
     scheduleAutosave();
     window.setTimeout(() => resources.forEach((resourceUrl) => URL.revokeObjectURL(resourceUrl)), 5000);
     return true;
@@ -1362,21 +1820,135 @@ async function loadModel(files) {
   }
 }
 
+function updateClearButtons() {
+  const hasWorkflow = Boolean(state.workflow);
+  const hasModel = Boolean(state.modelRoot || state.modelFile);
+  const clearWorkflowBtn = $('#clear-workflow');
+  const clearModelBtn = $('#clear-model');
+  const clearWorkspaceBtn = $('#clear-workspace');
+  if (clearWorkflowBtn) clearWorkflowBtn.hidden = !hasWorkflow;
+  if (clearModelBtn) clearModelBtn.hidden = !hasModel;
+  if (clearWorkspaceBtn) clearWorkspaceBtn.disabled = !hasWorkflow && !hasModel;
+}
+
+function resetViewportCameraAndHelpers() {
+  camera.up.set(0, 1, 0);
+  camera.position.set(4, 3, 6);
+  camera.near = 0.01;
+  camera.far = 100000;
+  camera.updateProjectionMatrix();
+  controls.target.set(0, 0, 0);
+  controls.minDistance = 0.01;
+  controls.maxDistance = Infinity;
+  controls.update();
+  grid.position.set(0, 0, 0);
+  grid.scale.setScalar(1);
+  axes.position.set(0, 0, 0);
+  axes.scale.setScalar(1);
+  updateViewGizmo();
+}
+
+function disposeModelRoot() {
+  if (!state.modelRoot) return;
+  scene.remove(state.modelRoot);
+  state.modelRoot.traverse((object) => {
+    if (!object.isMesh) return;
+    object.geometry?.dispose();
+    const mats = Array.isArray(object.material) ? object.material : [object.material];
+    mats.filter(Boolean).forEach((material) => material.dispose());
+  });
+  state.modelRoot = null;
+}
+
+async function clearWorkflow({ silent = false } = {}) {
+  if (!state.workflow) return;
+  stopPreview();
+  setPlacementMode(false);
+  removeArrowObjects();
+  state.workflow = null;
+  state.workflowFile = '';
+  state.workflowExportName = '';
+  state.currentSceneIndex = -1;
+  state.currentStepIndex = -1;
+  state.currentArrowIndex = -1;
+  state.unityTransformSteps = new WeakSet();
+  renderWorkflow();
+  renderInspector();
+  $('#project-status').textContent = state.modelRoot ? 'MODEL READY' : 'LOCAL WORKSPACE';
+  updateClearButtons();
+  window.clearTimeout(autosaveTimer);
+  await autosaveQueue;
+  try {
+    await deleteAutosaveRecord('draft');
+    if (autosaveEnabled) setAutosaveStatus(state.modelRoot ? 'Workflow cleared' : 'No saved draft');
+  } catch (error) {
+    setAutosaveStatus('Could not update saved draft', true);
+  }
+  if (!silent) showToast('Cleared loaded workflow.');
+}
+
+async function clearModel({ silent = false } = {}) {
+  if (!state.modelRoot && !state.modelFile) return;
+  stopPreview();
+  setPlacementMode(false);
+  removeArrowObjects();
+  disposeModelRoot();
+  state.modelFile = '';
+  state.modelFiles = [];
+  state.modelSize = 1;
+  state.modelDimensions.set(1, 1, 1);
+  state.modelCenter.set(0, 0, 0);
+  state.modelMetersPerUnit = UNITY_MODEL_UNIT_SCALE;
+  state.hoveredPoint = null;
+  hoverMarker.visible = false;
+  modelAssetsDirty = false;
+  state.unityModelTransform = defaultUnityModelTransform();
+  renderUnityModelTransformControls();
+  $('#model-name').textContent = 'Load 3D model';
+  $('#model-hint').textContent = 'FBX · GLB · GLTF · OBJ · STL (+ optional .prefab)';
+  $('#model-badge').classList.remove('loaded');
+  $('#model-badge').innerHTML = '<span></span> NO MODEL';
+  $('#viewport-model-label').textContent = 'MODEL VIEWPORT';
+  $('#coordinate-readout').innerHTML = 'X 0.000 &nbsp; Y 0.000 &nbsp; Z 0.000';
+  ui.emptyState.classList.remove('hidden');
+  resetViewportCameraAndHelpers();
+  $('#project-status').textContent = state.workflow ? 'WORKFLOW LOADED' : 'LOCAL WORKSPACE';
+  renderInspector();
+  updateClearButtons();
+  window.clearTimeout(autosaveTimer);
+  await autosaveQueue;
+  try {
+    await deleteAutosaveRecord('model-assets');
+    if (autosaveEnabled && state.workflow) scheduleAutosave();
+    else if (autosaveEnabled) setAutosaveStatus('No saved draft');
+  } catch (error) {
+    setAutosaveStatus('Could not clear saved model', true);
+  }
+  if (!silent) showToast('Cleared loaded 3D model.');
+}
+
+async function clearWorkspace() {
+  if (!state.workflow && !state.modelRoot && !state.modelFile) return;
+  if (!window.confirm('Clear the loaded 3D model and workflow JSON?')) return;
+  await clearWorkflow({ silent: true });
+  await clearModel({ silent: true });
+  showToast('Cleared model and workflow.');
+}
+
 function exportWorkflow() {
   if (!state.workflow) return;
-  const isCipWorkflow = isCipWorkflowName(state.workflowExportName);
-  if (isCipWorkflow && !unityArrowTemplate) {
-    showToast('The Unity arrow model is still loading. Try exporting again shortly.', true);
-    return;
-  }
   const hasLocalArrows = state.workflow.sop.some((sceneData) => sceneData.steps.some((step) =>
     Array.isArray(step.animationIndicator) && !state.unityTransformSteps.has(step),
   ));
-  if (isCipWorkflow && hasLocalArrows && !state.modelRoot) {
-    showToast('Load the CIP model before exporting arrow positions.', true);
+  if (hasLocalArrows && !unityArrowTemplate) {
+    showToast('The Unity arrow model is still loading. Try exporting again shortly.', true);
     return;
   }
-  const workflow = isCipWorkflow ? workflowForUnityExport() : state.workflow;
+  if (hasLocalArrows && !state.modelRoot) {
+    showToast('Load the 3D model before exporting arrow positions.', true);
+    return;
+  }
+  const workflow = workflowForUnityExport();
   const payload = JSON.stringify(workflow, null, 2);
   const blob = new Blob([payload], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -1430,11 +2002,12 @@ function animate(now = 0) {
   if (state.previewMode) {
     const elapsed = (now - previewStarted) / 1000;
     const phase = (1 - Math.cos((elapsed / UNITY_ARROW_ANIMATION_PERIOD) * Math.PI * 2)) * 0.5;
+    const unitScale = state.modelMetersPerUnit > 0 ? state.modelMetersPerUnit : UNITY_MODEL_UNIT_SCALE;
     for (const arrow of state.arrowObjects) {
       const base = previewPositions.get(arrow);
       if (!base) continue;
       const localX = new THREE.Vector3(1, 0, 0).applyQuaternion(arrow.quaternion);
-      const travel = (UNITY_ARROW_ANIMATION_TRAVEL / UNITY_MODEL_UNIT_SCALE) * arrow.scale.x * phase;
+      const travel = (UNITY_ARROW_ANIMATION_TRAVEL / unitScale) * arrow.scale.x * phase;
       arrow.position.copy(base).addScaledVector(localX, travel);
     }
   }
@@ -1454,6 +2027,55 @@ ui.modelInput.addEventListener('change', (event) => {
   if (event.target.files?.length) loadModel(event.target.files);
   event.target.value = '';
 });
+$('#prefab-upload').addEventListener('click', () => $('#prefab-input').click());
+$('#prefab-input').addEventListener('change', async (event) => {
+  const [file] = event.target.files || [];
+  event.target.value = '';
+  if (!file) return;
+  try {
+    const extracted = await applyUnityPrefabFile(file);
+    showToast(`Applied Unity prefab offset from ${file.name}${extracted.name ? ` (${extracted.name})` : ''}.`);
+  } catch (error) {
+    showToast(error.message, true);
+  }
+});
+$('#prefab-reset').addEventListener('click', () => {
+  state.unityModelTransform = defaultUnityModelTransform();
+  renderUnityModelTransformControls();
+  if (currentStep() && state.unityTransformSteps.has(currentStep())) renderCurrentArrows();
+  scheduleAutosave();
+  showToast('Reset Unity prefab model offset to identity.');
+});
+[
+  ['unity-model-pos-x', 'position', 'x'],
+  ['unity-model-pos-y', 'position', 'y'],
+  ['unity-model-pos-z', 'position', 'z'],
+  ['unity-model-rot-x', 'rotation', 'x'],
+  ['unity-model-rot-y', 'rotation', 'y'],
+  ['unity-model-rot-z', 'rotation', 'z'],
+  ['unity-model-scale-x', 'scale', 'x'],
+  ['unity-model-scale-y', 'scale', 'y'],
+  ['unity-model-scale-z', 'scale', 'z'],
+].forEach(([id, group, axis]) => {
+  const input = document.getElementById(id);
+  if (!input) return;
+  input.addEventListener('change', () => {
+    const value = Number(input.value);
+    if (!Number.isFinite(value) || (group === 'scale' && Math.abs(value) < 1e-8)) {
+      showToast(group === 'scale' ? 'Enter a non-zero numeric scale value.' : 'Enter a valid numeric offset value.', true);
+      renderUnityModelTransformControls();
+      return;
+    }
+    state.unityModelTransform[group][axis] = value;
+    state.unityModelTransform.source = '';
+    renderUnityModelTransformControls();
+    if (currentStep() && state.unityTransformSteps.has(currentStep())) renderCurrentArrows();
+    scheduleAutosave();
+  });
+});
+$('#clear-workflow').addEventListener('click', () => clearWorkflow());
+$('#clear-model').addEventListener('click', () => clearModel());
+$('#clear-workspace').addEventListener('click', () => clearWorkspace());
 ui.exportButton.addEventListener('click', exportWorkflow);
 ui.placementButton.addEventListener('click', () => setPlacementMode(!state.placementMode));
 ui.previewButton.addEventListener('click', () => state.previewMode ? stopPreview() : startPreview());
@@ -1508,6 +2130,8 @@ window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && state.placementMode) setPlacementMode(false);
   if ((event.key === 'Delete' || event.key === 'Backspace') && state.currentArrowIndex >= 0 && !['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) removeSelectedArrow();
 });
+renderUnityModelTransformControls();
 renderWorkflow();
 renderInspector();
+updateClearButtons();
 initializeAutosave();

@@ -28,16 +28,60 @@
             </div>
             <span class="file-count" id="step-count">—</span>
           </div>
-          <button class="file-card" id="workflow-upload">
-            <span class="file-symbol">{ }</span>
-            <span class="file-copy"><strong id="workflow-name">Open workflow JSON or Excel</strong><small id="workflow-hint">JSON · XLSX scenario matrix</small></span>
-            <span class="file-action">＋</span>
-          </button>
-          <button class="file-card" id="model-upload">
-            <span class="file-symbol cube-symbol">◇</span>
-            <span class="file-copy"><strong id="model-name">Load 3D model</strong><small id="model-hint">FBX · GLB · GLTF · OBJ · STL</small></span>
-            <span class="file-action">＋</span>
-          </button>
+          <div class="file-row">
+            <button class="file-card" id="workflow-upload">
+              <span class="file-symbol">{ }</span>
+              <span class="file-copy"><strong id="workflow-name">Open workflow JSON or Excel</strong><small id="workflow-hint">JSON · XLSX scenario matrix</small></span>
+              <span class="file-action">＋</span>
+            </button>
+            <button class="file-clear-btn" id="clear-workflow" type="button" title="Clear loaded workflow JSON" aria-label="Clear loaded workflow" hidden>×</button>
+          </div>
+          <div class="file-row">
+            <button class="file-card" id="model-upload">
+              <span class="file-symbol cube-symbol">◇</span>
+              <span class="file-copy"><strong id="model-name">Load 3D model</strong><small id="model-hint">FBX · GLB · GLTF · OBJ · STL (+ optional .prefab)</small></span>
+              <span class="file-action">＋</span>
+            </button>
+            <button class="file-clear-btn" id="clear-model" type="button" title="Clear loaded 3D model" aria-label="Clear loaded 3D model" hidden>×</button>
+          </div>
+          <button class="button button-quiet clear-workspace-btn" id="clear-workspace" type="button" disabled title="Clear loaded 3D model and workflow JSON">Clear model &amp; workflow</button>
+          <details class="unity-prefab-card" id="unity-prefab-panel">
+            <summary class="unity-prefab-summary">
+              <span>UNITY PREFAB OFFSET</span>
+              <span class="unity-prefab-badge" id="unity-prefab-badge">0, 0, 0</span>
+            </summary>
+            <div class="unity-prefab-body">
+              <div class="unity-prefab-actions">
+                <button class="button button-quiet unity-prefab-btn" id="prefab-upload" type="button" title="Auto-read the FBX child Transform from a Unity .prefab file">Load Unity .prefab</button>
+                <button class="button button-quiet unity-prefab-reset" id="prefab-reset" type="button" title="Reset Unity model offset to identity">Reset</button>
+              </div>
+              <div class="vector-group">
+                <span class="vector-title">MODEL POSITION · UNITY METERS</span>
+                <div class="vector-inputs">
+                  <div class="vector-field pos"><label for="unity-model-pos-x">x</label><input id="unity-model-pos-x" type="number" step="0.001" value="0" /></div>
+                  <div class="vector-field pos"><label for="unity-model-pos-y">y</label><input id="unity-model-pos-y" type="number" step="0.001" value="0" /></div>
+                  <div class="vector-field pos"><label for="unity-model-pos-z">z</label><input id="unity-model-pos-z" type="number" step="0.001" value="0" /></div>
+                </div>
+              </div>
+              <div class="vector-group">
+                <span class="vector-title">MODEL ROTATION · UNITY DEGREES</span>
+                <div class="vector-inputs">
+                  <div class="vector-field rot"><label for="unity-model-rot-x">x</label><input id="unity-model-rot-x" type="number" step="1" value="0" /></div>
+                  <div class="vector-field rot"><label for="unity-model-rot-y">y</label><input id="unity-model-rot-y" type="number" step="1" value="0" /></div>
+                  <div class="vector-field rot"><label for="unity-model-rot-z">z</label><input id="unity-model-rot-z" type="number" step="1" value="0" /></div>
+                </div>
+              </div>
+              <div class="vector-group">
+                <span class="vector-title">MODEL SCALE · UNITY</span>
+                <div class="vector-inputs">
+                  <div class="vector-field scale"><label for="unity-model-scale-x">x</label><input id="unity-model-scale-x" type="number" step="0.01" value="1" /></div>
+                  <div class="vector-field scale"><label for="unity-model-scale-y">y</label><input id="unity-model-scale-y" type="number" step="0.01" value="1" /></div>
+                  <div class="vector-field scale"><label for="unity-model-scale-z">z</label><input id="unity-model-scale-z" type="number" step="0.01" value="1" /></div>
+                </div>
+              </div>
+              <p class="unity-prefab-help" id="unity-prefab-help">Matches the FBX child Transform under Unity's animationController.</p>
+            </div>
+          </details>
           <div class="section-label"><span>SCENES &amp; STEPS</span><span class="section-line"></span></div>
           <nav id="workflow-list" class="workflow-list" aria-label="Workflow scenes and steps">
             <div class="empty-list">Open a workflow JSON or Excel scenario sheet to see its steps.</div>
@@ -54,7 +98,7 @@
             <div class="breadcrumb"><span id="breadcrumb-scene">No workflow loaded</span><span class="crumb-separator">/</span><strong id="breadcrumb-step">Select a step</strong></div>
             <div class="toolbar-actions">
               <span class="model-badge" id="model-badge"><span></span> NO MODEL</span>
-              <label class="front-axis-control" title="Auto uses the model's longer horizontal axis; choose another camera axis if needed">
+              <label class="front-axis-control" title="Auto uses the model's Unity front (+Z) axis after FBX axis conversion; choose another camera axis if needed">
                 UNITY FRONT
                 <select id="front-axis" aria-label="Unity front camera axis">
                   <option value="auto">Auto</option>
@@ -140,7 +184,8 @@
         </aside>
       </main>
       <input id="workflow-input" type="file" accept=".json,.xlsx,application/json" hidden />
-      <input id="model-input" type="file" accept=".fbx,.glb,.gltf,.obj,.stl,.bin,.mtl,.png,.jpg,.jpeg,.webp,.tga,.bmp,.dds" multiple hidden />
+      <input id="model-input" type="file" accept=".fbx,.glb,.gltf,.obj,.stl,.bin,.mtl,.png,.jpg,.jpeg,.webp,.tga,.bmp,.dds,.prefab" multiple hidden />
+      <input id="prefab-input" type="file" accept=".prefab" hidden />
       <dialog id="scenario-dialog" class="scenario-dialog">
         <form method="dialog">
           <span class="eyebrow">EXCEL WORKFLOW</span>
