@@ -1173,15 +1173,42 @@ function eventPoint(event) {
 
 let primaryPointerStart = null;
 let suppressPrimaryClick = false;
+let rightMouseDown = false;
+let lastFrameTime = 0;
+const flyKeys = new Set();
+const FLY_MOVE_CODES = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'ShiftLeft', 'ShiftRight']);
+const flyForward = new THREE.Vector3();
+const flyRight = new THREE.Vector3();
+const flyMove = new THREE.Vector3();
+const worldUp = new THREE.Vector3(0, 1, 0);
+
+function stopFlyMovement() {
+  rightMouseDown = false;
+  flyKeys.clear();
+}
+
 renderer.domElement.addEventListener('pointerdown', (event) => {
   if (event.button === 0) {
     primaryPointerStart = { x: event.clientX, y: event.clientY };
     suppressPrimaryClick = false;
+  } else if (event.button === 2) {
+    rightMouseDown = true;
+    if (document.activeElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) {
+      document.activeElement.blur();
+    }
   }
 });
 renderer.domElement.addEventListener('pointerup', (event) => {
   if (event.button === 0) primaryPointerStart = null;
+  if (event.button === 2) stopFlyMovement();
 });
+window.addEventListener('pointerup', (event) => {
+  if (event.button === 2) stopFlyMovement();
+});
+window.addEventListener('pointermove', (event) => {
+  if (rightMouseDown && (event.buttons & 2) === 0) stopFlyMovement();
+});
+window.addEventListener('blur', stopFlyMovement);
 
 function modelIntersections() {
   if (!state.modelRoot) return [];
@@ -1996,8 +2023,34 @@ function startPreview() {
   renderInspector();
 }
 
+function updateFlyCamera(dt) {
+  if (!rightMouseDown || !controls.enabled || !flyKeys.size || dt <= 0) return;
+  const forwardInput = (flyKeys.has('KeyW') ? 1 : 0) - (flyKeys.has('KeyS') ? 1 : 0);
+  const rightInput = (flyKeys.has('KeyD') ? 1 : 0) - (flyKeys.has('KeyA') ? 1 : 0);
+  const upInput = (flyKeys.has('KeyE') ? 1 : 0) - (flyKeys.has('KeyQ') ? 1 : 0);
+  if (!forwardInput && !rightInput && !upInput) return;
+
+  camera.getWorldDirection(flyForward).normalize();
+  flyRight.set(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
+  flyMove.set(0, 0, 0);
+  if (forwardInput) flyMove.addScaledVector(flyForward, forwardInput);
+  if (rightInput) flyMove.addScaledVector(flyRight, rightInput);
+  if (upInput) flyMove.addScaledVector(worldUp, upInput);
+  if (flyMove.lengthSq() === 0) return;
+
+  flyMove.normalize();
+  const baseSpeed = Math.max(state.modelSize * 2.125, 1.25);
+  const speedMultiplier = (flyKeys.has('ShiftLeft') || flyKeys.has('ShiftRight')) ? 2.5 : 1;
+  flyMove.multiplyScalar(baseSpeed * speedMultiplier * dt);
+  camera.position.add(flyMove);
+  controls.target.add(flyMove);
+}
+
 function animate(now = 0) {
   requestAnimationFrame(animate);
+  const dt = lastFrameTime ? Math.min(Math.max((now - lastFrameTime) / 1000, 0), 0.1) : 0;
+  lastFrameTime = now;
+  updateFlyCamera(dt);
   controls.update();
   if (state.previewMode) {
     const elapsed = (now - previewStarted) / 1000;
@@ -2124,11 +2177,27 @@ $('#clear-autosave').addEventListener('click', async () => {
 });
 window.addEventListener('pagehide', flushAutosave);
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') flushAutosave();
+  if (document.visibilityState === 'hidden') {
+    stopFlyMovement();
+    flushAutosave();
+  }
 });
 window.addEventListener('keydown', (event) => {
+  const isTyping = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)
+    || document.activeElement?.isContentEditable;
+  if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
+    flyKeys.add(event.code);
+  }
+  if (rightMouseDown && !isTyping && FLY_MOVE_CODES.has(event.code)) {
+    flyKeys.add(event.code);
+    if (event.code !== 'ShiftLeft' && event.code !== 'ShiftRight') event.preventDefault();
+    return;
+  }
   if (event.key === 'Escape' && state.placementMode) setPlacementMode(false);
-  if ((event.key === 'Delete' || event.key === 'Backspace') && state.currentArrowIndex >= 0 && !['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) removeSelectedArrow();
+  if ((event.key === 'Delete' || event.key === 'Backspace') && state.currentArrowIndex >= 0 && !isTyping) removeSelectedArrow();
+});
+window.addEventListener('keyup', (event) => {
+  flyKeys.delete(event.code);
 });
 renderUnityModelTransformControls();
 renderWorkflow();
